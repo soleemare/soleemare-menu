@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+
 const PLACE_ID = process.env.GOOGLE_PLACE_ID;
 const API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 

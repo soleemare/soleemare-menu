@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "../../../lib/supabaseAdmin";
 import { mapBannerRecordsToSlides, type BannerRecord } from "../../../lib/bannerSlides";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   try {
     const { data, error } = await supabaseAdmin

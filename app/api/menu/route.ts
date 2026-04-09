@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { supabaseServer } from "../../../lib/supabaseAdmin";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   const { data: products, error: productsError } = await supabaseServer
     .from("products")
