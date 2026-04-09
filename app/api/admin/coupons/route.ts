@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { requireAdminUser } from "../../../../lib/adminGuard";
 import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
 
+export const dynamic = "force-dynamic";
+
 type CouponPayload = {
   id?: string;
   code?: string;

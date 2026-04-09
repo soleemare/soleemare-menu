@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { requireAdminUser } from "../../../../lib/adminGuard";
 import { supabaseAdmin } from "../../../../lib/supabaseAdmin";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   const auth = await requireAdminUser();
   if (!auth.ok) return auth.response;

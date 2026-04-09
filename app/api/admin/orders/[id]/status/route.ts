@@ -6,6 +6,8 @@ import {
   sendWhatsAppTextMessage,
 } from "../../../../../../lib/whatsapp";
 
+export const dynamic = "force-dynamic";
+
 type OrderRow = {
   id: string;
   status: string;
