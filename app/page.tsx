@@ -1,6 +1,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import HeroSlider from "@/components/HeroSlider";
+import { fetchGoogleReviews } from "@/lib/googleReviews";
 import { getStoreStatus, weeklySchedule } from "@/lib/storeHours";
 
 export const revalidate = 900;
@@ -79,15 +80,7 @@ function pickGoogleReviews(reviews: GoogleReview[], now: Date) {
 
 async function getGoogleReviews() {
   try {
-    const baseUrl =
-      process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-
-    const res = await fetch(`${baseUrl}/api/google-reviews`, {
-      next: { revalidate: 900 },
-    });
-
-    if (!res.ok) return null;
-    return res.json();
+    return await fetchGoogleReviews();
   } catch {
     return null;
   }
