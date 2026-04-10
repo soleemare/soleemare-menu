@@ -53,22 +53,32 @@ function validatePayload(payload: BannerPayload) {
 }
 
 export async function GET() {
-  const auth = await requireAdminUser();
-  if (!auth.ok) return auth.response;
+  try {
+    const auth = await requireAdminUser();
+    if (!auth.ok) return auth.response;
 
-  const { data, error } = await supabaseAdmin
-    .from("banners")
-    .select("*")
-    .order("sort_order", { ascending: true });
+    const { data, error } = await supabaseAdmin
+      .from("banners")
+      .select("*")
+      .order("sort_order", { ascending: true });
 
-  if (error) {
+    if (error) {
+      return NextResponse.json(
+        { ok: false, error: "No se pudieron cargar los banners.", detail: error.message },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({ ok: true, banners: data || [] });
+  } catch (error: unknown) {
+    const detail =
+      error instanceof Error ? error.message : "No se pudieron cargar los banners.";
+
     return NextResponse.json(
-      { ok: false, error: "No se pudieron cargar los banners.", detail: error.message },
+      { ok: false, error: "No se pudieron cargar los banners.", detail },
       { status: 500 }
     );
   }
-
-  return NextResponse.json({ ok: true, banners: data || [] });
 }
 
 export async function POST(req: Request) {

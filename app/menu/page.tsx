@@ -74,10 +74,15 @@ export default function MenuPage() {
         setError("");
 
         const res = await fetch("/api/menu", { cache: "no-store" });
+        const payload = await res.json();
 
-        if (!res.ok) throw new Error("No se pudo cargar el menú.");
+        if (!res.ok) {
+          throw new Error(
+            payload?.detail || payload?.error || "No se pudo cargar el menú."
+          );
+        }
 
-        const data: MenuSection[] = await res.json();
+        const data = payload as MenuSection[];
         setMenuData(data);
 
         const initialVariants: Record<number, number> = {};
@@ -102,8 +107,11 @@ export default function MenuPage() {
 
         setSelectedVariants(initialVariants);
         setSelectedOptionGroupVariants(initialOptionGroupVariants);
-      } catch {
-        setError("No se pudo cargar el menú.");
+      } catch (error: unknown) {
+        console.error("Error cargando menú:", error);
+        setError(
+          error instanceof Error ? error.message : "No se pudo cargar el menú."
+        );
       } finally {
         setLoading(false);
       }

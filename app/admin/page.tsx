@@ -43,6 +43,7 @@ export default function AdminPage() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [orderItems, setOrderItems] = useState<OrderItemRow[]>([]);
@@ -58,28 +59,41 @@ export default function AdminPage() {
 
   useEffect(() => {
     const load = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
 
-      if (!session) {
-        router.push("/admin/login");
-        return;
-      }
+        if (!session) {
+          router.push("/admin/login");
+          return;
+        }
 
-      const res = await fetch("/api/admin/dashboard", { cache: "no-store" });
-      const data = (await res.json()) as DashboardResponse;
+        const res = await fetch("/api/admin/dashboard", { cache: "no-store" });
+        const data = (await res.json()) as DashboardResponse & {
+          error?: string;
+          detail?: string;
+        };
 
-      if (!res.ok || !data.ok) {
-        console.error("Error dashboard:", data);
+        if (!res.ok || !data.ok) {
+          console.error("Error dashboard:", data);
+          setError(
+            data.detail ||
+              data.error ||
+              "No se pudo cargar el dashboard en este momento."
+          );
+          return;
+        }
+
+        setOrders(data.orders || []);
+        setCustomers(data.customers || []);
+        setOrderItems(data.orderItems || []);
+      } catch (error: unknown) {
+        console.error("Error dashboard:", error);
+        setError("No se pudo cargar el dashboard en este momento.");
+      } finally {
         setLoading(false);
-        return;
       }
-
-      setOrders(data.orders || []);
-      setCustomers(data.customers || []);
-      setOrderItems(data.orderItems || []);
-      setLoading(false);
     };
 
     load();
@@ -229,6 +243,17 @@ export default function AdminPage() {
     return (
       <main className="rounded-3xl border border-[#c9dfc3] bg-white p-6 text-[#046703] shadow-sm">
         Cargando dashboard...
+      </main>
+    );
+  }
+
+  if (error) {
+    return (
+      <main className="rounded-3xl border border-[#f6070b]/20 bg-white p-6 shadow-sm">
+        <p className="text-lg font-semibold text-[#f6070b]">
+          No se pudo cargar el dashboard.
+        </p>
+        <p className="mt-2 text-sm text-neutral-600">{error}</p>
       </main>
     );
   }

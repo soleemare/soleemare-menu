@@ -173,6 +173,7 @@ function BannerPreview({ slide }: { slide: BannerSlide }) {
 export default function AdminBannersPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [banners, setBanners] = useState<BannerRecord[]>([]);
   const [creating, setCreating] = useState(false);
@@ -182,20 +183,38 @@ export default function AdminBannersPage() {
 
   const loadBanners = async () => {
     const res = await fetch("/api/admin/banners", { cache: "no-store" });
-    const data = await res.json();
+    const data = (await res.json()) as {
+      ok: boolean;
+      banners?: BannerRecord[];
+      error?: string;
+      detail?: string;
+    };
 
     if (!res.ok || !data.ok) {
-      toast.error(data.error || "No se pudieron cargar los banners");
-      return;
+      throw new Error(
+        data.detail || data.error || "No se pudieron cargar los banners."
+      );
     }
 
     setBanners(data.banners || []);
+    setError("");
   };
 
   useEffect(() => {
     const init = async () => {
-      await loadBanners();
-      setLoading(false);
+      try {
+        await loadBanners();
+      } catch (error: unknown) {
+        console.error("Error cargando banners:", error);
+        const message =
+          error instanceof Error
+            ? error.message
+            : "No se pudieron cargar los banners.";
+        setError(message);
+        toast.error(message);
+      } finally {
+        setLoading(false);
+      }
     };
 
     init();
@@ -571,6 +590,8 @@ export default function AdminBannersPage() {
             </button>
           </div>
         </div>
+
+        {error ? <p className="mt-4 text-[#f6070b]">{error}</p> : null}
       </section>
 
       {creating && (

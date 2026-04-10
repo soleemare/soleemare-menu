@@ -56,6 +56,7 @@ export default function AdminCustomersPage() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [search, setSearch] = useState("");
@@ -66,27 +67,40 @@ export default function AdminCustomersPage() {
 
   useEffect(() => {
     const load = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
 
-      if (!session) {
-        router.push("/admin/login");
-        return;
-      }
+        if (!session) {
+          router.push("/admin/login");
+          return;
+        }
 
-      const res = await fetch("/api/admin/customers", { cache: "no-store" });
-      const data = (await res.json()) as CustomersResponse;
+        const res = await fetch("/api/admin/customers", { cache: "no-store" });
+        const data = (await res.json()) as CustomersResponse & {
+          error?: string;
+          detail?: string;
+        };
 
-      if (!res.ok || !data.ok) {
-        console.error("Error customers:", data);
+        if (!res.ok || !data.ok) {
+          console.error("Error customers:", data);
+          setError(
+            data.detail ||
+              data.error ||
+              "No se pudieron cargar los clientes."
+          );
+          return;
+        }
+
+        setCustomers(data.customers || []);
+        setOrders(data.orders || []);
+      } catch (error: unknown) {
+        console.error("Error customers:", error);
+        setError("No se pudieron cargar los clientes.");
+      } finally {
         setLoading(false);
-        return;
       }
-
-      setCustomers(data.customers || []);
-      setOrders(data.orders || []);
-      setLoading(false);
     };
 
     load();
@@ -211,6 +225,17 @@ export default function AdminCustomersPage() {
     return (
       <main className="rounded-3xl border border-[#c9dfc3] bg-white p-6 text-[#046703] shadow-sm">
         Cargando clientes...
+      </main>
+    );
+  }
+
+  if (error) {
+    return (
+      <main className="rounded-3xl border border-[#f6070b]/20 bg-white p-6 shadow-sm">
+        <p className="text-lg font-semibold text-[#f6070b]">
+          No se pudieron cargar los clientes.
+        </p>
+        <p className="mt-2 text-sm text-neutral-600">{error}</p>
       </main>
     );
   }

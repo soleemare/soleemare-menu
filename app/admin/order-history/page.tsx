@@ -59,6 +59,7 @@ export default function AdminOrderHistoryPage() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [orders, setOrders] = useState<OrderHistoryRow[]>([]);
   const [search, setSearch] = useState("");
   const [historyFilter, setHistoryFilter] = useState<HistoryFilter>("all");
@@ -69,29 +70,45 @@ export default function AdminOrderHistoryPage() {
 
   const loadOrders = async () => {
     const res = await fetch("/api/admin/order-history", { cache: "no-store" });
-    const data = (await res.json()) as OrderHistoryResponse;
+    const data = (await res.json()) as OrderHistoryResponse & {
+      error?: string;
+      detail?: string;
+    };
 
     if (!res.ok || !data.ok) {
       console.error("Error cargando historial:", data);
-      return;
+      throw new Error(
+        data.detail || data.error || "No se pudo cargar el historial."
+      );
     }
 
     setOrders(data.orders || []);
+    setError("");
   };
 
   useEffect(() => {
     const init = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
 
-      if (!session) {
-        router.push("/admin/login");
-        return;
+        if (!session) {
+          router.push("/admin/login");
+          return;
+        }
+
+        await loadOrders();
+      } catch (error: unknown) {
+        console.error("Error cargando historial:", error);
+        setError(
+          error instanceof Error
+            ? error.message
+            : "No se pudo cargar el historial."
+        );
+      } finally {
+        setLoading(false);
       }
-
-      await loadOrders();
-      setLoading(false);
     };
 
     init();
@@ -227,6 +244,17 @@ export default function AdminOrderHistoryPage() {
     return (
       <main className="rounded-3xl border border-[#c9dfc3] bg-white p-6 text-[#046703] shadow-sm">
         Cargando historial...
+      </main>
+    );
+  }
+
+  if (error) {
+    return (
+      <main className="rounded-3xl border border-[#f6070b]/20 bg-white p-6 shadow-sm">
+        <p className="text-lg font-semibold text-[#f6070b]">
+          No se pudo cargar el historial.
+        </p>
+        <p className="mt-2 text-sm text-neutral-600">{error}</p>
       </main>
     );
   }

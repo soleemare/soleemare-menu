@@ -43,6 +43,7 @@ export default function AdminCouponsPage() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [coupons, setCoupons] = useState<CouponRow[]>([]);
   const [couponUsages, setCouponUsages] = useState<CouponUsageRow[]>([]);
   const [orders, setOrders] = useState<OrderRow[]>([]);
@@ -61,31 +62,46 @@ export default function AdminCouponsPage() {
 
   const loadCoupons = async () => {
     const res = await fetch("/api/admin/coupons", { cache: "no-store" });
-    const data = (await res.json()) as CouponsResponse;
+    const data = (await res.json()) as CouponsResponse & {
+      detail?: string;
+    };
 
     if (!res.ok || !data.ok) {
       console.error("Error coupons:", data);
-      return;
+      throw new Error(
+        data.detail || data.error || "No se pudieron cargar los cupones."
+      );
     }
 
     setCoupons(data.coupons || []);
     setCouponUsages(data.couponUsages || []);
     setOrders(data.orders || []);
+    setError("");
   };
 
   useEffect(() => {
     const load = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
 
-      if (!session) {
-        router.push("/admin/login");
-        return;
+        if (!session) {
+          router.push("/admin/login");
+          return;
+        }
+
+        await loadCoupons();
+      } catch (error: unknown) {
+        console.error("Error coupons:", error);
+        setError(
+          error instanceof Error
+            ? error.message
+            : "No se pudieron cargar los cupones."
+        );
+      } finally {
+        setLoading(false);
       }
-
-      await loadCoupons();
-      setLoading(false);
     };
 
     load();
@@ -282,6 +298,17 @@ export default function AdminCouponsPage() {
     return (
       <main className="rounded-3xl border border-[#c9dfc3] bg-white p-6 text-[#046703] shadow-sm">
         Cargando cupones...
+      </main>
+    );
+  }
+
+  if (error) {
+    return (
+      <main className="rounded-3xl border border-[#f6070b]/20 bg-white p-6 shadow-sm">
+        <p className="text-lg font-semibold text-[#f6070b]">
+          No se pudieron cargar los cupones.
+        </p>
+        <p className="mt-2 text-sm text-neutral-600">{error}</p>
       </main>
     );
   }

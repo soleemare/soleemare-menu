@@ -41,6 +41,7 @@ const categories = [
 export default function AdminMenuPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [savingId, setSavingId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>("");
@@ -94,11 +95,34 @@ export default function AdminMenuPage() {
   });
 
   async function loadProducts() {
-    setLoading(true);
-    const res = await fetch("/api/admin/products", { cache: "no-store" });
-    const data = await res.json();
-    setProducts(data);
-    setLoading(false);
+    try {
+      setLoading(true);
+      const res = await fetch("/api/admin/products", { cache: "no-store" });
+      const data = (await res.json()) as {
+        ok: boolean;
+        products?: Product[];
+        error?: string;
+        detail?: string;
+      };
+
+      if (!res.ok || !data.ok) {
+        throw new Error(
+          data.detail || data.error || "No se pudo cargar el menú admin."
+        );
+      }
+
+      setProducts(data.products || []);
+      setError("");
+    } catch (error: unknown) {
+      console.error("Error cargando productos:", error);
+      setError(
+        error instanceof Error
+          ? error.message
+          : "No se pudo cargar el menú admin."
+      );
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -114,8 +138,23 @@ export default function AdminMenuPage() {
     const res = await fetch(`/api/admin/variants?productId=${productId}`, {
       cache: "no-store",
     });
-    const data = await res.json();
-    setVariantsByProduct((prev) => ({ ...prev, [productId]: data }));
+    const data = (await res.json()) as {
+      ok: boolean;
+      variants?: Variant[];
+      error?: string;
+      detail?: string;
+    };
+
+    if (!res.ok || !data.ok) {
+      throw new Error(
+        data.detail || data.error || "No se pudieron cargar las variantes."
+      );
+    }
+
+    setVariantsByProduct((prev) => ({
+      ...prev,
+      [productId]: data.variants || [],
+    }));
   }
 
   async function toggleVariants(productId: number) {
@@ -453,6 +492,7 @@ export default function AdminMenuPage() {
             <p className="mt-2 text-sm text-neutral-500">
               Luego podrás ver sus productos y agregar uno nuevo.
             </p>
+            {error ? <p className="mt-4 text-[#f6070b]">{error}</p> : null}
           </section>
         ) : (
           <>
@@ -475,6 +515,8 @@ export default function AdminMenuPage() {
                   {showCreateForm ? "Cerrar formulario" : "Agregar producto"}
                 </button>
               </div>
+
+              {error ? <p className="mt-4 text-[#f6070b]">{error}</p> : null}
 
               {showCreateForm && (
                 <form

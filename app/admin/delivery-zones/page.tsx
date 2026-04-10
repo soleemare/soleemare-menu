@@ -19,6 +19,7 @@ type Zone = {
 export default function AdminDeliveryZonesPage() {
   const [zones, setZones] = useState<Zone[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [savingId, setSavingId] = useState<number | null>(null);
 
   const [newZone, setNewZone] = useState({
@@ -39,11 +40,36 @@ export default function AdminDeliveryZonesPage() {
   });
 
   async function loadZones() {
-    setLoading(true);
-    const res = await fetch("/api/admin/delivery-zones", { cache: "no-store" });
-    const data = await res.json();
-    setZones(data);
-    setLoading(false);
+    try {
+      setLoading(true);
+      const res = await fetch("/api/admin/delivery-zones", {
+        cache: "no-store",
+      });
+      const data = (await res.json()) as {
+        ok: boolean;
+        zones?: Zone[];
+        error?: string;
+        detail?: string;
+      };
+
+      if (!res.ok || !data.ok) {
+        throw new Error(
+          data.detail || data.error || "No se pudieron cargar las zonas."
+        );
+      }
+
+      setZones(data.zones || []);
+      setError("");
+    } catch (error: unknown) {
+      console.error("Error cargando zonas:", error);
+      setError(
+        error instanceof Error
+          ? error.message
+          : "No se pudieron cargar las zonas."
+      );
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -271,6 +297,8 @@ export default function AdminDeliveryZonesPage() {
 
           {loading ? (
             <p className="mt-4 text-neutral-500">Cargando zonas...</p>
+          ) : error ? (
+            <p className="mt-4 text-[#f6070b]">{error}</p>
           ) : zones.length === 0 ? (
             <p className="mt-4 text-neutral-500">No hay zonas creadas.</p>
           ) : (
