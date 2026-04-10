@@ -5,6 +5,7 @@ import { fetchGoogleReviews } from "@/lib/googleReviews";
 import { getStoreStatus, weeklySchedule } from "@/lib/storeHours";
 
 export const revalidate = 900;
+export const dynamic = "force-dynamic";
 
 type GoogleReview = {
   author: string;
