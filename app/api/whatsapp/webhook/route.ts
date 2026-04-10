@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { sendWhatsAppTextMessage } from "@/lib/whatsapp";
+
+const AUTO_REPLY_MESSAGE =
+  "Hola. Este número se usa para notificaciones automáticas de pedidos de Sole e Mare.\nSi necesitas ayuda, escríbenos al +56997925852";
 
 // 🔹 Verificación inicial de Meta (MUY IMPORTANTE)
 export async function GET(req: NextRequest) {
@@ -28,6 +32,23 @@ export async function POST(req: NextRequest) {
       "📩 Webhook recibido:",
       JSON.stringify(payload, null, 2)
     );
+
+    const messages = payload?.entry?.flatMap((entry: { changes?: Array<{ value?: { messages?: Array<{ from?: string; type?: string }> } }> }) =>
+      (entry.changes || []).flatMap((change) => change.value?.messages || [])
+    ) || [];
+
+    for (const message of messages) {
+      if (!message?.from || message.type === "reaction") continue;
+
+      try {
+        await sendWhatsAppTextMessage({
+          to: message.from,
+          body: AUTO_REPLY_MESSAGE,
+        });
+      } catch (replyError) {
+        console.error("❌ Error enviando respuesta automática:", replyError);
+      }
+    }
 
     return NextResponse.json({ ok: true });
   } catch (error) {
