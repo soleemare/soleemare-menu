@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "../../../lib/supabaseAdmin";
+import {
+  sendWhatsAppTemplateMessage,
+  sendWhatsAppTextMessage,
+} from "../../../lib/whatsapp";
 
 export const dynamic = "force-dynamic";
 
@@ -25,9 +29,17 @@ type CreateOrderRequest = {
     pago: string;
     deliveryPrice: number;
     couponCode: string | null;
+    isScheduled?: boolean;
+    scheduledFor?: string | null;
   };
   cart: CartItemPayload[];
 };
+
+const scheduledTemplateName =
+  process.env.NEXT_PUBLIC_WHATSAPP_TEMPLATE_ORDER_SCHEDULED ||
+  "pedido_programado";
+const whatsappTemplateLanguage =
+  process.env.NEXT_PUBLIC_WHATSAPP_TEMPLATE_LANGUAGE || "es_CL";
 
 function generateTrackingCode() {
   const rand = Math.random().toString(36).slice(2, 7).toUpperCase();
@@ -143,6 +155,56 @@ async function validarCuponDisponible({
   }
 
   return coupon;
+}
+
+function formatScheduledForWhatsApp(dateIso: string) {
+  return new Date(dateIso).toLocaleString("es-CL", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+async function sendScheduledOrderWhatsApp({
+  customerName,
+  customerPhone,
+  trackingCode,
+  scheduledForIso,
+}: {
+  customerName: string;
+  customerPhone: string;
+  trackingCode: string;
+  scheduledForIso: string;
+}) {
+  const formattedDate = formatScheduledForWhatsApp(scheduledForIso);
+
+  if (scheduledTemplateName) {
+    await sendWhatsAppTemplateMessage({
+      to: customerPhone,
+      name: scheduledTemplateName,
+      languageCode: whatsappTemplateLanguage,
+      bodyParameters: [
+        { text: customerName || "cliente" },
+        { text: trackingCode },
+        { text: formattedDate },
+      ],
+    });
+
+    return;
+  }
+
+  await sendWhatsAppTextMessage({
+    to: customerPhone,
+    body: `Hola, ${customerName || "cliente"}.
+
+Tu pedido con codigo ${trackingCode} quedo programado correctamente.
+Lo dejaremos agendado para ${formattedDate}.
+
+Cuando comencemos a prepararlo, te avisaremos por este medio.
+Gracias por preferir Sole e Mare.`,
+  });
 }
 
 export async function POST(req: Request) {
@@ -268,13 +330,29 @@ export async function POST(req: Request) {
         : subtotalWithDiscount;
 
     const trackingCode = await generateUniqueTrackingCode();
+    const isScheduled = Boolean(order.isScheduled);
+    let scheduledForIso: string | null = null;
+
+    if (isScheduled) {
+      if (!order.scheduledFor) {
+        throw new Error("Debes seleccionar un horario para programar el pedido.");
+      }
+
+      const scheduledDate = new Date(order.scheduledFor);
+
+      if (Number.isNaN(scheduledDate.getTime())) {
+        throw new Error("La fecha programada no es válida.");
+      }
+
+      scheduledForIso = scheduledDate.toISOString();
+    }
 
     const { data: createdOrder, error: orderError } = await supabaseAdmin
       .from("orders")
       .insert({
         customer_id: customerId,
         tracking_code: trackingCode,
-        status: "pending",
+        status: isScheduled ? "scheduled" : "pending",
         delivery_type: order.tipoEntrega,
         address: order.tipoEntrega === "Delivery" ? order.direccion : null,
         zone: order.tipoEntrega === "Delivery" ? order.zona : null,
@@ -283,6 +361,7 @@ export async function POST(req: Request) {
             ? order.otraZona
             : null,
         payment_method: order.pago,
+        estimated_at: scheduledForIso,
         subtotal,
         discount_amount: discountAmount,
         delivery_amount: deliveryAmount,
@@ -329,10 +408,36 @@ export async function POST(req: Request) {
       }
     }
 
+    if (isScheduled && scheduledForIso) {
+      try {
+        await sendScheduledOrderWhatsApp({
+          customerName: customer.nombre,
+          customerPhone: telefonoNormalizado,
+          trackingCode: createdOrder.tracking_code,
+          scheduledForIso,
+        });
+      } catch (whatsAppError) {
+        console.error(
+          "No se pudo enviar WhatsApp de pedido programado:",
+          whatsAppError
+        );
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       trackingCode: createdOrder.tracking_code,
-      message: "Pedido enviado. Te avisaremos cuando sea confirmado.",
+      message: isScheduled
+        ? `Pedido programado para ${new Date(
+            scheduledForIso as string
+          ).toLocaleString("es-CL", {
+            weekday: "long",
+            day: "numeric",
+            month: "long",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}.`
+        : "Pedido enviado. Te avisaremos cuando sea confirmado.",
     });
   } catch (error: unknown) {
     const message =

@@ -2,10 +2,17 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
 import { useCart } from "../../context/CartContext";
 import Cart from "../../components/Cart";
-import { getStoreStatus } from "../../lib/storeHours";
+import {
+  getDateKeyFromIso,
+  getSchedulableDays,
+  formatScheduledDateTime,
+  getScheduleSlotsForDay,
+  getStoreStatus,
+} from "../../lib/storeHours";
 
 type Variant = {
   id: number;
@@ -55,10 +62,25 @@ export default function MenuPage() {
   const { addToCart, cart } = useCart();
   const hasCartItems = cart.length > 0;
   const storeStatus = getStoreStatus();
+  const schedulableDays = useMemo(() => getSchedulableDays(), []);
+  const schedulableDayOptions = useMemo(
+    () =>
+      schedulableDays.map((day) => ({
+        ...day,
+        slots: getScheduleSlotsForDay(day, 30, new Date()),
+      })),
+    [schedulableDays]
+  );
 
   const [menuData, setMenuData] = useState<MenuSection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [scheduledOrderEnabled, setScheduledOrderEnabled] = useState(false);
+  const [isScheduleConfiguratorOpen, setIsScheduleConfiguratorOpen] = useState(false);
+  const [selectedScheduledDayKey, setSelectedScheduledDayKey] = useState("");
+  const [selectedScheduledSlot, setSelectedScheduledSlot] = useState("");
+  const [draftScheduledDayKey, setDraftScheduledDayKey] = useState("");
+  const [draftScheduledSlot, setDraftScheduledSlot] = useState("");
 
   const [selectedVariants, setSelectedVariants] = useState<
     Record<number, number>
@@ -66,6 +88,60 @@ export default function MenuPage() {
 
   const [selectedOptionGroupVariants, setSelectedOptionGroupVariants] =
     useState<Record<string, number>>({});
+
+  const draftScheduledDay =
+    schedulableDayOptions.find((day) => day.key === draftScheduledDayKey) ||
+    schedulableDayOptions[0] ||
+    null;
+
+  const draftSchedulableSlots = draftScheduledDay?.slots || [];
+
+  useEffect(() => {
+    const savedMode = localStorage.getItem("order_mode");
+    const savedScheduledFor = localStorage.getItem("order_scheduled_for");
+    const isScheduled = savedMode === "scheduled";
+
+    if (schedulableDayOptions.length === 0) {
+      setScheduledOrderEnabled(false);
+      setSelectedScheduledDayKey("");
+      setSelectedScheduledSlot("");
+      return;
+    }
+
+    const defaultDay = schedulableDayOptions[0];
+    const defaultSlot = defaultDay.slots[0]?.value || "";
+
+    setSelectedScheduledDayKey(defaultDay.key);
+    setSelectedScheduledSlot(defaultSlot);
+    setDraftScheduledDayKey(defaultDay.key);
+    setDraftScheduledSlot(defaultSlot);
+
+    if (isScheduled && savedScheduledFor) {
+      const savedDayKey = getDateKeyFromIso(savedScheduledFor);
+      const matchingDay = schedulableDayOptions.find(
+        (day) => day.key === savedDayKey
+      );
+
+      if (matchingDay) {
+        const matchingSlot = matchingDay.slots.find(
+          (slot) => slot.value === savedScheduledFor
+        );
+
+        if (matchingSlot) {
+          setScheduledOrderEnabled(true);
+          setSelectedScheduledDayKey(matchingDay.key);
+          setSelectedScheduledSlot(matchingSlot.value);
+          setDraftScheduledDayKey(matchingDay.key);
+          setDraftScheduledSlot(matchingSlot.value);
+          setIsScheduleConfiguratorOpen(false);
+          return;
+        }
+      }
+    }
+
+    setScheduledOrderEnabled(false);
+    setIsScheduleConfiguratorOpen(false);
+  }, [schedulableDayOptions]);
 
   useEffect(() => {
     async function loadMenu() {
@@ -120,6 +196,69 @@ export default function MenuPage() {
     loadMenu();
   }, []);
 
+  const openScheduleConfigurator = () => {
+    if (schedulableDayOptions.length === 0) {
+      toast.error("No encontramos horarios disponibles para programar.");
+      return;
+    }
+
+    const activeDayKey =
+      selectedScheduledDayKey || schedulableDayOptions[0]?.key || "";
+    const activeDay =
+      schedulableDayOptions.find((day) => day.key === activeDayKey) ||
+      schedulableDayOptions[0];
+    const activeSlot =
+      selectedScheduledSlot ||
+      activeDay?.slots[0]?.value ||
+      "";
+
+    setDraftScheduledDayKey(activeDay?.key || "");
+    setDraftScheduledSlot(activeSlot);
+    setIsScheduleConfiguratorOpen(true);
+  };
+
+  const activateScheduledOrder = () => {
+    if (!draftScheduledSlot) {
+      toast.error("No encontramos un horario disponible para programar.");
+      return;
+    }
+
+    setSelectedScheduledDayKey(draftScheduledDayKey);
+    setSelectedScheduledSlot(draftScheduledSlot);
+    localStorage.setItem("order_mode", "scheduled");
+    localStorage.setItem("order_scheduled_for", draftScheduledSlot);
+    setScheduledOrderEnabled(true);
+    setIsScheduleConfiguratorOpen(false);
+    toast.success("Pedido programado guardado");
+  };
+
+  const clearScheduledOrder = () => {
+    localStorage.removeItem("order_mode");
+    localStorage.removeItem("order_scheduled_for");
+    setScheduledOrderEnabled(false);
+    setIsScheduleConfiguratorOpen(false);
+    toast.success("Volviste al modo normal");
+  };
+
+  const cancelScheduleConfigurator = () => {
+    setDraftScheduledDayKey(selectedScheduledDayKey);
+    setDraftScheduledSlot(selectedScheduledSlot);
+    setIsScheduleConfiguratorOpen(false);
+  };
+
+  const selectScheduledDay = (dayKey: string) => {
+    const matchingDay = schedulableDayOptions.find((day) => day.key === dayKey);
+    if (!matchingDay || matchingDay.slots.length === 0) return;
+
+    const nextSlot = matchingDay.slots[0].value;
+    setDraftScheduledDayKey(dayKey);
+    setDraftScheduledSlot(nextSlot);
+  };
+
+  const selectScheduledSlot = (slotValue: string) => {
+    setDraftScheduledSlot(slotValue);
+  };
+
   return (
     <main className="min-h-screen bg-[#c9dfc3]/20 px-4 pb-28 pt-8 sm:px-6 md:pb-16">
       <div
@@ -172,6 +311,157 @@ export default function MenuPage() {
               >
                 {storeStatus.message}
               </div>
+            </div>
+
+            <div className="mx-auto mt-4 max-w-2xl rounded-[28px] border border-[#c9dfc3] bg-white p-4 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[#69adb6]">
+                ¿Cómo quieres pedir?
+              </p>
+
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={clearScheduledOrder}
+                  disabled={!storeStatus.isOpen}
+                  className={`rounded-[24px] border px-5 py-4 text-left transition ${
+                    !scheduledOrderEnabled
+                      ? "border-[#046703]/20 bg-[#046703] text-white shadow-sm"
+                      : "border-[#c9dfc3] bg-[#f8fbf7] text-neutral-700 hover:border-[#69adb6] hover:bg-[#69adb6]/10"
+                  } ${
+                    !storeStatus.isOpen
+                      ? "cursor-not-allowed border-neutral-200 bg-neutral-100 text-neutral-400 shadow-none hover:border-neutral-200 hover:bg-neutral-100"
+                      : ""
+                  }`}
+                >
+                  <div className="text-sm font-semibold">Pedir ahora</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={openScheduleConfigurator}
+                  disabled={schedulableDayOptions.length === 0}
+                  className={`rounded-[24px] border px-5 py-4 text-left transition ${
+                    scheduledOrderEnabled
+                      ? "border-[#f48e07]/20 bg-[#fff3e4] text-[#046703] shadow-sm"
+                      : "border-[#f48e07]/20 bg-white text-neutral-700 hover:border-[#f48e07] hover:bg-[#fff3e4]"
+                  } ${
+                    schedulableDayOptions.length === 0
+                      ? "cursor-not-allowed opacity-60"
+                      : ""
+                  }`}
+                >
+                  <div className="text-sm font-semibold">Programar para más tarde</div>
+                </button>
+              </div>
+
+              {schedulableDayOptions.length > 0 && isScheduleConfiguratorOpen && (
+                <div className="mt-4 rounded-[24px] border border-[#f48e07]/20 bg-[#fffaf4] p-4 text-left">
+                  <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px_auto] lg:items-end">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#f48e07]">
+                          Fecha
+                        </p>
+
+                        {schedulableDayOptions.map((day) => {
+                          const isActive = draftScheduledDay?.key === day.key;
+
+                          return (
+                            <button
+                              key={day.key}
+                              type="button"
+                              onClick={() => selectScheduledDay(day.key)}
+                              className={`rounded-full border px-3 py-2 text-sm font-medium transition ${
+                                isActive
+                                  ? "border-[#046703] bg-[#046703] text-white"
+                                  : "border-[#c9dfc3] bg-white text-neutral-700 hover:border-[#69adb6] hover:bg-[#69adb6]/10"
+                              }`}
+                            >
+                              {day.shortLabel}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {draftScheduledDay && (
+                        <p className="mt-3 text-sm text-neutral-600">
+                          {draftScheduledDay.label}
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#f48e07]">
+                        Hora
+                      </label>
+                      <select
+                        value={draftScheduledSlot}
+                        onChange={(e) => selectScheduledSlot(e.target.value)}
+                        className="mt-2 w-full rounded-2xl border border-[#c9dfc3] bg-white px-4 py-3 text-sm text-neutral-700 outline-none transition focus:border-[#69adb6] focus:ring-2 focus:ring-[#69adb6]/20"
+                      >
+                        {draftSchedulableSlots.map((slot) => (
+                          <option key={slot.value} value={slot.value}>
+                            {slot.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={activateScheduledOrder}
+                      disabled={!draftScheduledSlot}
+                      className={`rounded-2xl px-5 py-3 text-sm font-semibold text-white transition ${
+                        draftScheduledSlot
+                          ? "bg-[#046703] hover:opacity-90"
+                          : "cursor-not-allowed bg-neutral-300"
+                      }`}
+                    >
+                      Confirmar
+                    </button>
+                  </div>
+
+                  {draftScheduledSlot && (
+                    <p className="mt-4 text-sm text-neutral-600">
+                      Programado para{" "}
+                      <strong className="text-[#046703]">
+                        {formatScheduledDateTime(draftScheduledSlot)}
+                      </strong>
+                      .
+                    </p>
+                  )}
+
+                  <div className="mt-3">
+                    <button
+                      type="button"
+                      onClick={cancelScheduleConfigurator}
+                      className="text-sm font-medium text-neutral-500 underline hover:text-[#046703]"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {scheduledOrderEnabled && selectedScheduledSlot && !isScheduleConfiguratorOpen && (
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-[#f48e07]/20 bg-[#fffaf4] px-4 py-3 text-left">
+                  <p className="text-sm text-neutral-600">
+                    Programado para{" "}
+                    <strong className="text-[#046703]">
+                      {formatScheduledDateTime(selectedScheduledSlot)}
+                    </strong>
+                    .
+                  </p>
+
+                  <button
+                    type="button"
+                    onClick={openScheduleConfigurator}
+                    className="rounded-full border border-[#c9dfc3] bg-white px-4 py-2 text-sm font-medium text-neutral-700 transition hover:border-[#69adb6] hover:bg-[#69adb6]/10"
+                  >
+                    Cambiar horario
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>

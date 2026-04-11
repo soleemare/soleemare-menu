@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import {
   GoogleMap,
@@ -12,7 +13,13 @@ import { useCart } from "../../context/CartContext";
 import type { CartItem } from "../../context/CartContext";
 import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
-import { getStoreStatus } from "../../lib/storeHours";
+import {
+  getDateKeyFromIso,
+  getSchedulableDays,
+  formatScheduledDateTime,
+  getScheduleSlotsForDay,
+  getStoreStatus,
+} from "../../lib/storeHours";
 import type { DeliveryZone } from "../../lib/deliveryZones";
 
 const containerStyle = {
@@ -82,6 +89,15 @@ export default function CheckoutPage() {
 
   const router = useRouter();
   const storeStatus = getStoreStatus();
+  const schedulableDays = useMemo(() => getSchedulableDays(), []);
+  const schedulableDayOptions = useMemo(
+    () =>
+      schedulableDays.map((day) => ({
+        ...day,
+        slots: getScheduleSlotsForDay(day, 30, new Date()),
+      })),
+    [schedulableDays]
+  );
 
   const [nombre, setNombre] = useState("");
   const [telefono, setTelefono] = useState("");
@@ -107,9 +123,19 @@ export default function CheckoutPage() {
   );
   const [detectedZonePrice, setDetectedZonePrice] = useState<number>(0);
   const [isSaving, setIsSaving] = useState(false);
+  const [isScheduledOrder, setIsScheduledOrder] = useState(false);
+  const [selectedScheduledDayKey, setSelectedScheduledDayKey] = useState("");
+  const [scheduledFor, setScheduledFor] = useState("");
 
   const [deliveryZones, setDeliveryZones] = useState<DeliveryZone[]>([]);
   const [zonesLoading, setZonesLoading] = useState(false);
+
+  const selectedScheduledDay =
+    schedulableDayOptions.find((day) => day.key === selectedScheduledDayKey) ||
+    schedulableDayOptions[0] ||
+    null;
+
+  const schedulableSlots = selectedScheduledDay?.slots || [];
 
   useEffect(() => {
     const saved = localStorage.getItem("cliente");
@@ -122,6 +148,46 @@ export default function CheckoutPage() {
       } catch {}
     }
   }, []);
+
+  useEffect(() => {
+    const savedMode = localStorage.getItem("order_mode");
+    const savedScheduledFor = localStorage.getItem("order_scheduled_for");
+
+    if (schedulableDayOptions.length === 0) {
+      setIsScheduledOrder(false);
+      setSelectedScheduledDayKey("");
+      setScheduledFor("");
+      return;
+    }
+
+    const defaultDay = schedulableDayOptions[0];
+    const defaultSlot = defaultDay.slots[0]?.value || "";
+
+    setSelectedScheduledDayKey(defaultDay.key);
+    setScheduledFor(defaultSlot);
+
+    if (savedMode === "scheduled" && savedScheduledFor) {
+      const savedDayKey = getDateKeyFromIso(savedScheduledFor);
+      const matchingDay = schedulableDayOptions.find(
+        (day) => day.key === savedDayKey
+      );
+
+      if (matchingDay) {
+        const matchingSlot = matchingDay.slots.find(
+          (slot) => slot.value === savedScheduledFor
+        );
+
+        if (matchingSlot) {
+          setIsScheduledOrder(true);
+          setSelectedScheduledDayKey(matchingDay.key);
+          setScheduledFor(matchingSlot.value);
+          return;
+        }
+      }
+    }
+
+    setIsScheduledOrder(false);
+  }, [schedulableDayOptions]);
 
   useEffect(() => {
     async function loadZones() {
@@ -377,6 +443,8 @@ export default function CheckoutPage() {
             pago,
             deliveryPrice,
             couponCode: appliedCoupon?.code || null,
+            isScheduled: isScheduledOrder,
+            scheduledFor: isScheduledOrder ? scheduledFor : null,
           },
           cart,
         }),
@@ -396,6 +464,9 @@ export default function CheckoutPage() {
           correo,
         })
       );
+
+      localStorage.removeItem("order_mode");
+      localStorage.removeItem("order_scheduled_for");
 
       return {
         ok: true,
@@ -457,6 +528,11 @@ export default function CheckoutPage() {
       newErrors.pago = "Selecciona la forma de pago";
     }
 
+    if (isScheduledOrder && !scheduledFor) {
+      toast.error("Selecciona un horario para programar el pedido");
+      return false;
+    }
+
     setErrors(newErrors);
 
     const firstError = Object.values(newErrors)[0];
@@ -471,7 +547,7 @@ export default function CheckoutPage() {
   const handleEnviarPedido = async () => {
     if (isSaving) return;
 
-    if (!storeStatus.isOpen) {
+    if (!storeStatus.isOpen && !isScheduledOrder) {
       toast.error("En este momento la tienda está cerrada");
       return;
     }
@@ -495,6 +571,16 @@ export default function CheckoutPage() {
     router.push(`/track/${result.trackingCode}`);
   };
 
+  const handleScheduledDayChange = (dayKey: string) => {
+    const matchingDay = schedulableDayOptions.find((day) => day.key === dayKey);
+    if (!matchingDay || matchingDay.slots.length === 0) return;
+
+    const nextSlot = matchingDay.slots[0].value;
+    setSelectedScheduledDayKey(dayKey);
+    setScheduledFor(nextSlot);
+    localStorage.setItem("order_scheduled_for", nextSlot);
+  };
+
   if (cart.length === 0) {
     return (
       <main className="min-h-screen bg-[#c9dfc3]/20 px-4 py-10">
@@ -516,13 +602,24 @@ export default function CheckoutPage() {
     <main className="min-h-screen bg-[#c9dfc3]/20 px-4 py-10">
       <div className="mx-auto mb-8 max-w-6xl">
         <div className="mb-2 flex items-center justify-between gap-4">
-          <div>
-            <p className="text-sm uppercase tracking-[0.3em] text-[#69adb6]">
-              Sole e Mare
-            </p>
-            <h1 className="mt-2 text-4xl font-bold tracking-tight text-[#046703]">
-              Checkout
-            </h1>
+          <div className="flex items-center gap-4">
+            <Image
+              src="/images/Logo_oficial.png"
+              alt="Sole e Mare"
+              width={96}
+              height={96}
+              className="h-16 w-16 object-contain sm:h-20 sm:w-20"
+              priority
+            />
+
+            <div>
+              <p className="text-sm uppercase tracking-[0.3em] text-[#69adb6]">
+                Sole e Mare
+              </p>
+              <h1 className="mt-2 text-4xl font-bold tracking-tight text-[#046703]">
+                Checkout
+              </h1>
+            </div>
           </div>
 
           <button
@@ -548,6 +645,25 @@ export default function CheckoutPage() {
             {storeStatus.message}
           </div>
         </div>
+
+        <div className="mt-4 flex flex-wrap gap-3">
+          <div
+            className={`rounded-full border px-4 py-2 text-sm font-medium ${
+              isScheduledOrder
+                ? "border-[#f48e07]/20 bg-[#fff3e4] text-[#046703]"
+                : "border-[#046703]/20 bg-[#046703]/10 text-[#046703]"
+            }`}
+          >
+            {isScheduledOrder ? "Modo: pedido programado" : "Modo: pedir ahora"}
+          </div>
+
+          {isScheduledOrder && scheduledFor && (
+            <div className="rounded-full border border-[#c9dfc3] bg-white px-4 py-2 text-sm text-neutral-600">
+              {formatScheduledDateTime(scheduledFor)}
+            </div>
+          )}
+        </div>
+
       </div>
 
       <div className="mx-auto grid max-w-6xl gap-6 lg:grid-cols-[1fr_1fr]">
@@ -717,6 +833,77 @@ export default function CheckoutPage() {
                 y WhatsApp.
               </span>
             </label>
+
+            {isScheduledOrder && selectedScheduledDay && (
+              <div className="rounded-2xl border border-[#f48e07]/20 bg-[#fff3e4] p-4">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[#f48e07]">
+                  Pedido programado
+                </p>
+
+                <p className="mt-2 text-sm leading-6 text-neutral-700">
+                  Tu pedido quedará agendado para{" "}
+                  <strong className="text-[#046703]">
+                    {selectedScheduledDay.label}
+                  </strong>
+                  .
+                </p>
+
+                <div className="mt-4">
+                  <label className="mb-2 block text-sm font-medium text-[#046703]">
+                    Día
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {schedulableDayOptions.map((day) => {
+                      const isActive = day.key === selectedScheduledDayKey;
+
+                      return (
+                        <button
+                          key={day.key}
+                          type="button"
+                          onClick={() => handleScheduledDayChange(day.key)}
+                          className={`rounded-full border px-3 py-2 text-sm font-medium transition ${
+                            isActive
+                              ? "border-[#046703] bg-[#046703] text-white"
+                              : "border-[#c9dfc3] bg-white text-neutral-700 hover:border-[#69adb6] hover:bg-[#69adb6]/10"
+                          }`}
+                        >
+                          {day.shortLabel}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <label className="mb-2 block text-sm font-medium text-[#046703]">
+                    Hora deseada
+                  </label>
+                  <select
+                    value={scheduledFor}
+                    onChange={(e) => {
+                      setScheduledFor(e.target.value);
+                      localStorage.setItem("order_scheduled_for", e.target.value);
+                    }}
+                    className={getInputClass()}
+                  >
+                    {schedulableSlots.map((slot) => (
+                      <option key={slot.value} value={slot.value}>
+                        {slot.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {scheduledFor && (
+                  <p className="mt-3 text-sm text-neutral-600">
+                    Programado para:{" "}
+                    <strong className="text-[#046703]">
+                      {formatScheduledDateTime(scheduledFor)}
+                    </strong>
+                  </p>
+                )}
+              </div>
+            )}
 
             <div>
               <select
@@ -1057,23 +1244,32 @@ export default function CheckoutPage() {
             </div>
           </div>
 
-          {!storeStatus.isOpen && (
+          {!storeStatus.isOpen && !isScheduledOrder && (
             <div className="mt-4 rounded-2xl border border-[#f6070b]/20 bg-[#f6070b]/10 p-4 text-sm text-[#f6070b]">
               {storeStatus.message}
             </div>
           )}
 
+          {isScheduledOrder && scheduledFor && (
+            <div className="mt-4 rounded-2xl border border-[#046703]/15 bg-[#046703]/8 p-4 text-sm text-[#046703]">
+              Este pedido se enviará como programado para{" "}
+              <strong>{formatScheduledDateTime(scheduledFor)}</strong>.
+            </div>
+          )}
+
           <button
             onClick={handleEnviarPedido}
-            disabled={isSaving || !storeStatus.isOpen}
+            disabled={isSaving || (!storeStatus.isOpen && !isScheduledOrder)}
             className={`mt-6 block w-full rounded-2xl py-4 text-center text-white transition ${
-              isSaving || !storeStatus.isOpen
+              isSaving || (!storeStatus.isOpen && !isScheduledOrder)
                 ? "cursor-not-allowed bg-neutral-400"
                 : "bg-[#f6070b] hover:opacity-90"
             }`}
           >
             {isSaving
               ? "Guardando pedido..."
+              : isScheduledOrder
+              ? "Programar pedido"
               : storeStatus.isOpen
               ? "Enviar pedido"
               : "Tienda cerrada"}

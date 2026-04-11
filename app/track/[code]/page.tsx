@@ -34,6 +34,7 @@ type TimelineStep = {
   label: string;
   description: string;
   dateField:
+    | "estimated_at"
     | "created_at"
     | "accepted_at"
     | "preparing_at"
@@ -44,6 +45,14 @@ type TimelineStep = {
 };
 
 const baseStepsDelivery: TimelineStep[] = [
+  {
+    key: "scheduled",
+    label: "Pedido programado",
+    description:
+      "Tu pedido quedó agendado y lo revisaremos cuando se acerque el horario seleccionado.",
+    dateField: "estimated_at",
+    icon: "📅",
+  },
   {
     key: "pending",
     label: "Solicitud recibida",
@@ -92,6 +101,14 @@ const baseStepsDelivery: TimelineStep[] = [
 
 const baseStepsPickup: TimelineStep[] = [
   {
+    key: "scheduled",
+    label: "Pedido programado",
+    description:
+      "Tu pedido quedó agendado y lo revisaremos cuando se acerque el horario seleccionado.",
+    dateField: "estimated_at",
+    icon: "📅",
+  },
+  {
     key: "pending",
     label: "Solicitud recibida",
     description:
@@ -131,6 +148,7 @@ const baseStepsPickup: TimelineStep[] = [
 ];
 
 const statusLabels: Record<string, string> = {
+  scheduled: "Programado",
   pending: "Pendiente por aceptar",
   accepted: "Aceptado",
   preparing: "En preparación",
@@ -141,6 +159,8 @@ const statusLabels: Record<string, string> = {
 };
 
 const statusMessages: Record<string, string> = {
+  scheduled:
+    "Tu pedido quedó agendado. Lo activaremos cuando se acerque el horario elegido.",
   pending: "Recibimos tu pedido y pronto lo revisaremos.",
   accepted: "Tu pedido fue confirmado y ya estamos avanzando con su preparación.",
   preparing: "Estamos preparando tu pedido en cocina.",
@@ -152,6 +172,7 @@ const statusMessages: Record<string, string> = {
 };
 
 const statusBadgeClass: Record<string, string> = {
+  scheduled: "bg-[#fff3e4] text-[#f48e07]",
   pending: "bg-[#fff3e4] text-[#f48e07]",
   accepted: "bg-[#046703]/10 text-[#046703]",
   preparing: "bg-[#69adb6]/10 text-[#046703]",
@@ -287,6 +308,7 @@ export default function TrackPage() {
   const isRejected = order.status === "rejected";
   const steps = isDelivery ? baseStepsDelivery : baseStepsPickup;
   const currentIndex = steps.findIndex((s) => s.key === order.status);
+  const isScheduledStatus = order.status === "scheduled";
 
   const progressPercent =
     isRejected
@@ -384,6 +406,7 @@ export default function TrackPage() {
 
   const showCountdown =
     !!countdown &&
+    order.status !== "scheduled" &&
     order.status !== "delivered" &&
     order.status !== "rejected" &&
     order.status !== "delivering";
@@ -442,19 +465,44 @@ export default function TrackPage() {
             </div>
           </div>
 
-          {order.estimated_minutes ? (
+          {(order.estimated_minutes || isScheduledStatus) ? (
             <div className="mt-4 rounded-2xl border border-[#c9dfc3] bg-[#f8f5ef] p-4">
-              <p className="font-medium text-[#046703]">
-                {isDelivery
-                  ? "Tiempo estimado de entrega"
-                  : "Tiempo estimado para retiro"}
-                : {order.estimated_minutes} min
-              </p>
+              {isScheduledStatus ? (
+                <>
+                  <p className="font-medium text-[#046703]">
+                    Pedido agendado para revisión
+                  </p>
 
-              {order.estimated_at && (
-                <p className="mt-1 text-sm text-neutral-500">
-                  Hora estimada: {formatEstimatedHour(order.estimated_at)}
-                </p>
+                  {order.estimated_at && (
+                    <p className="mt-1 text-sm text-neutral-600">
+                      Fecha y hora programada:{" "}
+                      <strong>
+                        {new Date(order.estimated_at).toLocaleString("es-CL", {
+                          weekday: "long",
+                          day: "numeric",
+                          month: "long",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </strong>
+                    </p>
+                  )}
+                </>
+              ) : (
+                <>
+                  <p className="font-medium text-[#046703]">
+                    {isDelivery
+                      ? "Tiempo estimado de entrega"
+                      : "Tiempo estimado para retiro"}
+                    : {order.estimated_minutes} min
+                  </p>
+
+                  {order.estimated_at && (
+                    <p className="mt-1 text-sm text-neutral-500">
+                      Hora estimada: {formatEstimatedHour(order.estimated_at)}
+                    </p>
+                  )}
+                </>
               )}
 
               {showCountdown && (

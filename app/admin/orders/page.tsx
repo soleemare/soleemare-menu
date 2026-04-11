@@ -456,6 +456,7 @@ export default function AdminOrdersPage() {
 
   const groupedOrders = useMemo(() => {
     return {
+      scheduled: orders.filter((o) => o.status === "scheduled"),
       pending: orders.filter((o) => o.status === "pending"),
       accepted: orders.filter((o) => o.status === "accepted"),
       preparing: orders.filter((o) => o.status === "preparing"),
@@ -563,6 +564,15 @@ export default function AdminOrdersPage() {
               </p>
             </div>
 
+            <div className="rounded-2xl border border-[#69adb6]/25 bg-[#69adb6]/10 px-4 py-3">
+              <p className="text-xs uppercase tracking-wide text-[#69adb6]/80">
+                Programados
+              </p>
+              <p className="mt-1 text-2xl font-bold text-[#69adb6]">
+                {groupedOrders.scheduled.length}
+              </p>
+            </div>
+
             <div className="rounded-2xl border border-[#c9dfc3] bg-[#c9dfc3]/15 px-4 py-3">
               <p className="text-xs uppercase tracking-wide text-neutral-400">
                 Consejo
@@ -599,6 +609,116 @@ export default function AdminOrdersPage() {
           </div>
         </div>
       </section>
+
+      {groupedOrders.scheduled.length > 0 && (
+        <section className="rounded-3xl border border-[#69adb6]/25 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-sm uppercase tracking-[0.25em] text-[#69adb6]">
+                Pedidos programados
+              </p>
+              <h2 className="mt-2 text-2xl font-bold text-[#046703]">
+                Activar cuando llegue su horario
+              </h2>
+            </div>
+
+            <p className="text-sm text-neutral-500">
+              Estos pedidos todavía no entran a la pizarra principal.
+            </p>
+          </div>
+
+          <div className="mt-5 grid gap-4 xl:grid-cols-2">
+            {groupedOrders.scheduled.map((order) => (
+              <article
+                key={order.id}
+                className="rounded-2xl border border-[#69adb6]/20 bg-[#69adb6]/5 p-5"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-semibold text-[#046703]">
+                      {order.customers?.name || "Cliente"}
+                    </p>
+                    <p className="text-sm text-neutral-500">
+                      {order.customers?.phone || "-"}
+                    </p>
+
+                    {order.tracking_code && (
+                      <p className="mt-2 inline-flex rounded-full border border-[#c9dfc3] bg-white px-3 py-1 text-xs font-semibold text-[#69adb6]">
+                        {order.tracking_code}
+                      </p>
+                    )}
+                  </div>
+
+                  <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-[#69adb6]">
+                    PROGRAMADO
+                  </span>
+                </div>
+
+                <div className="mt-4 grid gap-2 text-sm text-neutral-700">
+                  <p>
+                    <strong>Fecha pedido:</strong>{" "}
+                    {new Date(order.created_at).toLocaleString("es-CL")}
+                  </p>
+                  {order.estimated_at && (
+                    <p>
+                      <strong>Programado para:</strong>{" "}
+                      {new Date(order.estimated_at).toLocaleString("es-CL", {
+                        weekday: "long",
+                        day: "numeric",
+                        month: "long",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </p>
+                  )}
+                  <p>
+                    <strong>Tipo:</strong> {order.delivery_type || "-"}
+                  </p>
+                  <p>
+                    <strong>Pago:</strong> {order.payment_method || "-"}
+                  </p>
+                </div>
+
+                <div className="mt-4 rounded-2xl border border-[#c9dfc3] bg-white px-4 py-3">
+                  <p className="mb-2 text-xs font-bold uppercase tracking-wide text-neutral-400">
+                    Pedido
+                  </p>
+                  <div className="space-y-1.5">
+                    {order.order_items?.map((item, index) => (
+                      <p key={index} className="text-sm text-neutral-700">
+                        • {item.product_name} x{item.quantity}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-4 flex items-center justify-between">
+                  <span className="text-lg font-bold text-[#f6070b]">
+                    ${Number(order.total || 0).toLocaleString("es-CL")}
+                  </span>
+
+                  <button
+                    onClick={async () => {
+                      const result = await updateOrder(order.id, {
+                        status: "pending",
+                        estimated_minutes: undefined,
+                      });
+
+                      if (!result.ok) return;
+
+                      await loadOrders();
+                      toast.success("Pedido activado y enviado a pendientes");
+                    }}
+                    className="rounded-xl bg-[#69adb6] px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
+                  >
+                    Activar pedido
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
         {columns.map((col) => (
