@@ -52,11 +52,14 @@ type OrderUpdateFields = {
 };
 
 const acceptedTemplateName =
-  process.env.NEXT_PUBLIC_WHATSAPP_TEMPLATE_ORDER_ACCEPTED || "";
+  process.env.NEXT_PUBLIC_WHATSAPP_TEMPLATE_ORDER_ACCEPTED ||
+  "pedido_aceptado_1";
 const rejectedTemplateName =
-  process.env.NEXT_PUBLIC_WHATSAPP_TEMPLATE_ORDER_REJECTED || "";
+  process.env.NEXT_PUBLIC_WHATSAPP_TEMPLATE_ORDER_REJECTED ||
+  "pedido_rechazado_1";
 const readyPickupTemplateName =
-  process.env.NEXT_PUBLIC_WHATSAPP_TEMPLATE_ORDER_READY_PICKUP || "";
+  process.env.NEXT_PUBLIC_WHATSAPP_TEMPLATE_ORDER_READY_PICKUP ||
+  "pedido_listo_retiro_1";
 const outForDeliveryTemplateName =
   process.env.NEXT_PUBLIC_WHATSAPP_TEMPLATE_ORDER_OUT_FOR_DELIVERY || "";
 const deliveredTemplateName =
