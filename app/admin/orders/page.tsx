@@ -4,6 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../../lib/supabase";
 import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
+import {
+  buildScheduledOrdersHeatmap,
+  getScheduledHeatmapBucketKey,
+  SCHEDULED_SLOT_CAPACITY,
+} from "../../../lib/storeHours";
 
 type Order = {
   id: string;
@@ -80,6 +85,10 @@ export default function AdminOrdersPage() {
   );
   const [draggedOrderId, setDraggedOrderId] = useState<string | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<ColumnKey | null>(null);
+  const [showScheduledHeatmap, setShowScheduledHeatmap] = useState(false);
+  const [selectedScheduledSlotKey, setSelectedScheduledSlotKey] = useState<
+    string | null
+  >(null);
 
   const [ringingOrderIds, setRingingOrderIds] = useState<string[]>([]);
 
@@ -129,56 +138,72 @@ export default function AdminOrdersPage() {
   };
 
   const loadOrders = async () => {
-    const res = await fetch("/api/admin/orders", { cache: "no-store" });
-    const data = (await res.json()) as OrdersResponse;
-
-    if (!res.ok || !data.ok) {
-      console.error("Error cargando pedidos:", data);
-      return;
-    }
-
-    const newOrders = data.orders || [];
-    const currentPendingOrders = newOrders.filter(
-      (order) => order.status === "pending"
-    );
-    const currentPendingIds = currentPendingOrders.map((order) => order.id);
-
-    if (initializedRef.current) {
-      const newPendingOrders = currentPendingOrders.filter(
-        (order) => !prevPendingIds.current.includes(order.id)
-      );
-
-      if (newPendingOrders.length > 0) {
-        setRingingOrderIds((prev) => {
-          const next = [...new Set([...prev, ...newPendingOrders.map((o) => o.id)])];
-          return next;
-        });
-
-        toast.success(
-          newPendingOrders.length === 1
-            ? "Entró un nuevo pedido"
-            : `Entraron ${newPendingOrders.length} nuevos pedidos`
-        );
-      }
-    }
-
-    prevPendingIds.current = currentPendingIds;
-    initializedRef.current = true;
-    setOrders(newOrders);
-
-    setEstimatedTimes((prev) => {
-      const next = { ...prev };
-      newOrders.forEach((order) => {
-        if (next[order.id] == null) {
-          next[order.id] = order.estimated_minutes ?? 20;
-        }
+    try {
+      const res = await fetch("/api/admin/orders", {
+        cache: "no-store",
+        credentials: "same-origin",
       });
-      return next;
-    });
+      const rawText = await res.text();
+      const data = rawText ? (JSON.parse(rawText) as OrdersResponse) : null;
 
-    setRingingOrderIds((prev) =>
-      prev.filter((id) => currentPendingIds.includes(id))
-    );
+      if (!res.ok || !data?.ok) {
+        console.warn(
+          "Error cargando pedidos:",
+          data?.detail || data?.error || rawText || "Sin respuesta"
+        );
+        return;
+      }
+
+      const newOrders = data.orders || [];
+      const currentPendingOrders = newOrders.filter(
+        (order) => order.status === "pending"
+      );
+      const currentPendingIds = currentPendingOrders.map((order) => order.id);
+
+      if (initializedRef.current) {
+        const newPendingOrders = currentPendingOrders.filter(
+          (order) => !prevPendingIds.current.includes(order.id)
+        );
+
+        if (newPendingOrders.length > 0) {
+          setRingingOrderIds((prev) => {
+            const next = [...new Set([...prev, ...newPendingOrders.map((o) => o.id)])];
+            return next;
+          });
+
+          toast.success(
+            newPendingOrders.length === 1
+              ? "Entró un nuevo pedido"
+              : `Entraron ${newPendingOrders.length} nuevos pedidos`
+          );
+        }
+      }
+
+      prevPendingIds.current = currentPendingIds;
+      initializedRef.current = true;
+      setOrders(newOrders);
+
+      setEstimatedTimes((prev) => {
+        const next = { ...prev };
+        newOrders.forEach((order) => {
+          if (next[order.id] == null) {
+            next[order.id] = order.estimated_minutes ?? 20;
+          }
+        });
+        return next;
+      });
+
+      setRingingOrderIds((prev) =>
+        prev.filter((id) => currentPendingIds.includes(id))
+      );
+    } catch (error) {
+      const detail =
+        error instanceof Error
+          ? error.message
+          : "No se pudieron cargar los pedidos.";
+
+      console.warn("Error cargando pedidos:", detail);
+    }
   };
 
   useEffect(() => {
@@ -465,6 +490,46 @@ export default function AdminOrdersPage() {
     };
   }, [orders]);
 
+  const scheduledHeatmap = useMemo(() => {
+    const scheduledDates = groupedOrders.scheduled
+      .map((order) => order.estimated_at)
+      .filter((value): value is string => Boolean(value));
+
+    return buildScheduledOrdersHeatmap(
+      scheduledDates,
+      2,
+      SCHEDULED_SLOT_CAPACITY
+    );
+  }, [groupedOrders.scheduled]);
+
+  const selectedScheduledOrders = useMemo(() => {
+    if (!selectedScheduledSlotKey) return [];
+
+    return groupedOrders.scheduled.filter((order) => {
+      if (!order.estimated_at) return false;
+
+      return (
+        getScheduledHeatmapBucketKey(order.estimated_at) ===
+        selectedScheduledSlotKey
+      );
+    });
+  }, [groupedOrders.scheduled, selectedScheduledSlotKey]);
+
+  const selectedScheduledSlotLabel = useMemo(() => {
+    if (!selectedScheduledSlotKey) return null;
+
+    const lastDashIndex = selectedScheduledSlotKey.lastIndexOf("-");
+    if (lastDashIndex === -1) return null;
+
+    const dayKey = selectedScheduledSlotKey.slice(0, lastDashIndex);
+    const hourLabel = selectedScheduledSlotKey.slice(lastDashIndex + 1);
+    const day = scheduledHeatmap.days.find((item) => item.key === dayKey);
+
+    if (!day) return null;
+
+    return `${day.label}, ${hourLabel}`;
+  }, [scheduledHeatmap.days, selectedScheduledSlotKey]);
+
   const totalActiveOrders =
     groupedOrders.pending.length +
     groupedOrders.accepted.length +
@@ -627,96 +692,229 @@ export default function AdminOrdersPage() {
             </p>
           </div>
 
-          <div className="mt-5 grid gap-4 xl:grid-cols-2">
-            {groupedOrders.scheduled.map((order) => (
-              <article
-                key={order.id}
-                className="rounded-2xl border border-[#69adb6]/20 bg-[#69adb6]/5 p-5"
+          {scheduledHeatmap.rows.length > 0 && (
+            <div className="mt-5 rounded-3xl border border-[#c9dfc3] bg-[#fbf8f1] p-5">
+              <button
+                type="button"
+                onClick={() =>
+                  setShowScheduledHeatmap((prev) => {
+                    if (prev) setSelectedScheduledSlotKey(null);
+                    return !prev;
+                  })
+                }
+                className="flex w-full items-center justify-between gap-4 rounded-2xl border border-[#d9e7d7] bg-white px-4 py-4 text-left transition hover:border-[#69adb6]/40 hover:bg-[#f8fbf8]"
               >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="font-semibold text-[#046703]">
-                      {order.customers?.name || "Cliente"}
-                    </p>
-                    <p className="text-sm text-neutral-500">
-                      {order.customers?.phone || "-"}
-                    </p>
-
-                    {order.tracking_code && (
-                      <p className="mt-2 inline-flex rounded-full border border-[#c9dfc3] bg-white px-3 py-1 text-xs font-semibold text-[#69adb6]">
-                        {order.tracking_code}
-                      </p>
-                    )}
-                  </div>
-
-                  <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-[#69adb6]">
-                    PROGRAMADO
-                  </span>
-                </div>
-
-                <div className="mt-4 grid gap-2 text-sm text-neutral-700">
-                  <p>
-                    <strong>Fecha pedido:</strong>{" "}
-                    {new Date(order.created_at).toLocaleString("es-CL")}
+                <div>
+                  <p className="text-xs uppercase tracking-[0.25em] text-[#69adb6]">
+                    Mapa programado
                   </p>
-                  {order.estimated_at && (
-                    <p>
-                      <strong>Programado para:</strong>{" "}
-                      {new Date(order.estimated_at).toLocaleString("es-CL", {
-                        weekday: "long",
-                        day: "numeric",
-                        month: "long",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </p>
-                  )}
-                  <p>
-                    <strong>Tipo:</strong> {order.delivery_type || "-"}
-                  </p>
-                  <p>
-                    <strong>Pago:</strong> {order.payment_method || "-"}
+                  <h3 className="mt-2 text-xl font-bold text-[#046703]">
+                    Cupos por horario
+                  </h3>
+                  <p className="mt-1 text-sm text-neutral-500">
+                    Cada bloque admite hasta {SCHEDULED_SLOT_CAPACITY} pedidos programados.
                   </p>
                 </div>
 
-                <div className="mt-4 rounded-2xl border border-[#c9dfc3] bg-white px-4 py-3">
-                  <p className="mb-2 text-xs font-bold uppercase tracking-wide text-neutral-400">
-                    Pedido
-                  </p>
-                  <div className="space-y-1.5">
-                    {order.order_items?.map((item, index) => (
-                      <p key={index} className="text-sm text-neutral-700">
-                        • {item.product_name} x{item.quantity}
-                      </p>
+                <div className="shrink-0 rounded-full border border-[#c9dfc3] px-4 py-2 text-sm font-semibold text-[#046703]">
+                  {showScheduledHeatmap ? "Ocultar mapa" : "Ver mapa"}
+                </div>
+              </button>
+
+              {showScheduledHeatmap && (
+                <div className="mt-4 space-y-4 overflow-x-auto">
+                  <div
+                    className="grid min-w-[860px] gap-2"
+                    style={{
+                      gridTemplateColumns: `150px repeat(${scheduledHeatmap.rows.length}, minmax(60px, 1fr))`,
+                    }}
+                  >
+                    <div className="rounded-2xl border border-[#d9e7d7] bg-white px-3 py-2.5 text-sm font-semibold text-neutral-500">
+                      Día / Hora
+                    </div>
+                    {scheduledHeatmap.rows.map((row) => (
+                      <div
+                        key={row.hour}
+                        className="rounded-2xl border border-[#d9e7d7] bg-white px-2 py-2.5 text-center"
+                      >
+                        <p className="text-xs font-semibold text-[#0f172a] sm:text-sm">
+                          {row.hour}
+                        </p>
+                      </div>
+                    ))}
+
+                    {scheduledHeatmap.days.map((day) => (
+                      <div
+                        key={day.key}
+                        className="contents"
+                      >
+                        <div className="rounded-2xl border border-[#d9e7d7] bg-white px-3 py-2.5">
+                          <p className="text-xs uppercase tracking-[0.18em] text-[#8cc8df]">
+                            {day.shortLabel}
+                          </p>
+                          <p className="mt-1 text-sm font-semibold text-[#0f172a]">
+                            {day.label}
+                          </p>
+                        </div>
+                        {scheduledHeatmap.rows.map((row) => {
+                          const cell = row.cells.find(
+                            (currentCell) => currentCell.key === `${day.key}-${row.hour}`
+                          );
+
+                          if (!cell) {
+                            return (
+                              <div
+                                key={`${day.key}-${row.hour}`}
+                                className="rounded-2xl border border-[#e7ece8] bg-white px-2 py-2 text-center text-sm font-semibold text-[#94a3b8]"
+                              >
+                                —
+                              </div>
+                            );
+                          }
+
+                          let tone =
+                            "border border-[#e7ece8] bg-white text-[#94a3b8]";
+
+                          if (cell.intensity >= 1) {
+                            tone =
+                              "border border-[#0a8f08] bg-[#0a8f08] text-white";
+                          } else if (cell.intensity >= 0.66) {
+                            tone =
+                              "border border-[#6fcd6d] bg-[#6fcd6d] text-[#0f172a]";
+                          } else if (cell.intensity > 0) {
+                            tone =
+                              "border border-[#c9dfc3] bg-[#dff2de] text-[#0f172a]";
+                          }
+
+                          const isSelected = selectedScheduledSlotKey === cell.key;
+                          const isInteractive = cell.count > 0;
+
+                          return (
+                            <button
+                              type="button"
+                              key={cell.key}
+                              onClick={() =>
+                                isInteractive
+                                  ? setSelectedScheduledSlotKey((current) =>
+                                      current === cell.key ? null : cell.key,
+                                    )
+                                  : undefined
+                              }
+                              className={`rounded-2xl px-2 py-2 text-center text-sm font-semibold transition ${tone} ${
+                                isInteractive
+                                  ? "cursor-pointer hover:scale-[1.02] hover:shadow-sm"
+                                  : "cursor-default"
+                              } ${isSelected ? "ring-2 ring-[#046703]/25" : ""}`}
+                              title={`${cell.label} ${row.hour}: ${cell.count} pedidos programados`}
+                            >
+                              {cell.count > 0 ? cell.count : "—"}
+                            </button>
+                          );
+                        })}
+                      </div>
                     ))}
                   </div>
+
+                  {selectedScheduledOrders.length > 0 && selectedScheduledSlotLabel && (
+                    <div className="rounded-3xl border border-[#c9dfc3] bg-white p-4">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.22em] text-[#69adb6]">
+                            Detalle del bloque
+                          </p>
+                          <h4 className="mt-1 text-lg font-bold text-[#046703]">
+                            {selectedScheduledSlotLabel}
+                          </h4>
+                          <p className="mt-1 text-sm text-neutral-500">
+                            {selectedScheduledOrders.length} pedido(s) programado(s) en este horario.
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setSelectedScheduledSlotKey(null)}
+                          className="rounded-full border border-[#c9dfc3] px-4 py-2 text-sm font-semibold text-[#046703] transition hover:bg-[#f8fbf8]"
+                        >
+                          Cerrar detalle
+                        </button>
+                      </div>
+
+                      <div className="mt-4 space-y-3">
+                        {selectedScheduledOrders.map((order) => (
+                          <article
+                            key={order.id}
+                            className="rounded-2xl border border-[#c9dfc3] bg-[#fbf8f1] p-4"
+                          >
+                            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="font-semibold text-[#046703]">
+                                    {order.customers?.name || "Cliente"}
+                                  </p>
+                                  {order.tracking_code && (
+                                    <span className="rounded-full border border-[#c9dfc3] bg-white px-3 py-1 text-xs font-semibold text-[#69adb6]">
+                                      {order.tracking_code}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="mt-1 text-sm text-neutral-500">
+                                  {order.customers?.phone || "-"}
+                                </p>
+
+                                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-sm text-neutral-700">
+                                  <p>
+                                    <strong>Tipo:</strong> {order.delivery_type || "-"}
+                                  </p>
+                                  <p>
+                                    <strong>Pago:</strong> {order.payment_method || "-"}
+                                  </p>
+                                  <p>
+                                    <strong>Total:</strong> ${Number(order.total || 0).toLocaleString("es-CL")}
+                                  </p>
+                                </div>
+
+                                <div className="mt-3 rounded-2xl border border-[#dfe9dd] bg-white px-3 py-2">
+                                  <p className="text-xs font-bold uppercase tracking-wide text-neutral-400">
+                                    Pedido
+                                  </p>
+                                  <div className="mt-1 space-y-1">
+                                    {order.order_items?.map((item, index) => (
+                                      <p key={index} className="text-sm text-neutral-700">
+                                        • {item.product_name} x{item.quantity}
+                                      </p>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="flex shrink-0 items-center justify-end">
+                                <button
+                                  onClick={async () => {
+                                    const result = await updateOrder(order.id, {
+                                      status: "pending",
+                                      estimated_minutes: undefined,
+                                    });
+
+                                    if (!result.ok) return;
+
+                                    await loadOrders();
+                                    toast.success("Pedido activado y enviado a pendientes");
+                                  }}
+                                  className="rounded-xl bg-[#69adb6] px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
+                                >
+                                  Activar pedido
+                                </button>
+                              </div>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
-
-                <div className="mt-4 flex items-center justify-between">
-                  <span className="text-lg font-bold text-[#f6070b]">
-                    ${Number(order.total || 0).toLocaleString("es-CL")}
-                  </span>
-
-                  <button
-                    onClick={async () => {
-                      const result = await updateOrder(order.id, {
-                        status: "pending",
-                        estimated_minutes: undefined,
-                      });
-
-                      if (!result.ok) return;
-
-                      await loadOrders();
-                      toast.success("Pedido activado y enviado a pendientes");
-                    }}
-                    className="rounded-xl bg-[#69adb6] px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
-                  >
-                    Activar pedido
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
+              )}
+            </div>
+          )}
         </section>
       )}
 

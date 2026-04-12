@@ -19,7 +19,23 @@ export async function GET() {
         .order("created_at", { ascending: false }),
       supabaseAdmin
         .from("orders")
-        .select("*")
+        .select(
+          `
+            id,
+            customer_id,
+            total,
+            status,
+            delivery_type,
+            payment_method,
+            tracking_code,
+            address,
+            zone,
+            other_zone,
+            created_at,
+            estimated_at,
+            order_items(product_name, quantity)
+          `
+        )
         .order("created_at", { ascending: false }),
     ]);
 

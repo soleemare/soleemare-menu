@@ -16,7 +16,9 @@ import toast from "react-hot-toast";
 import {
   getDateKeyFromIso,
   getSchedulableDays,
+  getScheduledSlotCounts,
   formatScheduledDateTime,
+  filterAvailableScheduleSlots,
   getScheduleSlotsForDay,
   getStoreStatus,
 } from "../../lib/storeHours";
@@ -90,13 +92,23 @@ export default function CheckoutPage() {
   const router = useRouter();
   const storeStatus = getStoreStatus();
   const schedulableDays = useMemo(() => getSchedulableDays(), []);
+  const [scheduledSlotValues, setScheduledSlotValues] = useState<string[]>([]);
+  const scheduledSlotCounts = useMemo(
+    () => getScheduledSlotCounts(scheduledSlotValues),
+    [scheduledSlotValues]
+  );
   const schedulableDayOptions = useMemo(
     () =>
-      schedulableDays.map((day) => ({
-        ...day,
-        slots: getScheduleSlotsForDay(day, 30, new Date()),
-      })),
-    [schedulableDays]
+      schedulableDays
+        .map((day) => ({
+          ...day,
+          slots: filterAvailableScheduleSlots(
+            getScheduleSlotsForDay(day, 30, new Date()),
+            scheduledSlotCounts
+          ),
+        }))
+        .filter((day) => day.slots.length > 0),
+    [schedulableDays, scheduledSlotCounts]
   );
 
   const [nombre, setNombre] = useState("");
@@ -136,6 +148,38 @@ export default function CheckoutPage() {
     null;
 
   const schedulableSlots = selectedScheduledDay?.slots || [];
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadScheduledAvailability = async () => {
+      try {
+        const res = await fetch("/api/orders/scheduled-availability", {
+          cache: "no-store",
+        });
+        const payload = await res.json();
+
+        if (!res.ok || !payload.ok) {
+          throw new Error(
+            payload?.detail ||
+              payload?.error ||
+              "No se pudo cargar la disponibilidad programada."
+          );
+        }
+
+        if (!isMounted) return;
+        setScheduledSlotValues(payload.scheduledDates || []);
+      } catch (error) {
+        console.error("Error cargando disponibilidad programada:", error);
+      }
+    };
+
+    loadScheduledAvailability();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     const saved = localStorage.getItem("cliente");
@@ -188,6 +232,28 @@ export default function CheckoutPage() {
 
     setIsScheduledOrder(false);
   }, [schedulableDayOptions]);
+
+  useEffect(() => {
+    if (!isScheduledOrder || schedulableDayOptions.length === 0) {
+      return;
+    }
+
+    const fallbackDay = schedulableDayOptions[0];
+    const activeDay =
+      schedulableDayOptions.find((day) => day.key === selectedScheduledDayKey) ||
+      fallbackDay;
+    const activeSlot = activeDay.slots.find((slot) => slot.value === scheduledFor);
+
+    if (activeDay.key !== selectedScheduledDayKey) {
+      setSelectedScheduledDayKey(activeDay.key);
+    }
+
+    if (!activeSlot) {
+      const nextSlot = activeDay.slots[0]?.value || "";
+      setScheduledFor(nextSlot);
+      localStorage.setItem("order_scheduled_for", nextSlot);
+    }
+  }, [isScheduledOrder, schedulableDayOptions, scheduledFor, selectedScheduledDayKey]);
 
   useEffect(() => {
     async function loadZones() {

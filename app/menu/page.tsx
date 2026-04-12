@@ -9,7 +9,9 @@ import Cart from "../../components/Cart";
 import {
   getDateKeyFromIso,
   getSchedulableDays,
+  getScheduledSlotCounts,
   formatScheduledDateTime,
+  filterAvailableScheduleSlots,
   getScheduleSlotsForDay,
   getStoreStatus,
 } from "../../lib/storeHours";
@@ -63,13 +65,23 @@ export default function MenuPage() {
   const hasCartItems = cart.length > 0;
   const storeStatus = getStoreStatus();
   const schedulableDays = useMemo(() => getSchedulableDays(), []);
+  const [scheduledSlotValues, setScheduledSlotValues] = useState<string[]>([]);
+  const scheduledSlotCounts = useMemo(
+    () => getScheduledSlotCounts(scheduledSlotValues),
+    [scheduledSlotValues]
+  );
   const schedulableDayOptions = useMemo(
     () =>
-      schedulableDays.map((day) => ({
-        ...day,
-        slots: getScheduleSlotsForDay(day, 30, new Date()),
-      })),
-    [schedulableDays]
+      schedulableDays
+        .map((day) => ({
+          ...day,
+          slots: filterAvailableScheduleSlots(
+            getScheduleSlotsForDay(day, 30, new Date()),
+            scheduledSlotCounts
+          ),
+        }))
+        .filter((day) => day.slots.length > 0),
+    [schedulableDays, scheduledSlotCounts]
   );
 
   const [menuData, setMenuData] = useState<MenuSection[]>([]);
@@ -95,6 +107,38 @@ export default function MenuPage() {
     null;
 
   const draftSchedulableSlots = draftScheduledDay?.slots || [];
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadScheduledAvailability = async () => {
+      try {
+        const res = await fetch("/api/orders/scheduled-availability", {
+          cache: "no-store",
+        });
+        const payload = await res.json();
+
+        if (!res.ok || !payload.ok) {
+          throw new Error(
+            payload?.detail ||
+              payload?.error ||
+              "No se pudo cargar la disponibilidad programada."
+          );
+        }
+
+        if (!isMounted) return;
+        setScheduledSlotValues(payload.scheduledDates || []);
+      } catch (error) {
+        console.error("Error cargando disponibilidad programada:", error);
+      }
+    };
+
+    loadScheduledAvailability();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     const savedMode = localStorage.getItem("order_mode");
@@ -142,6 +186,51 @@ export default function MenuPage() {
     setScheduledOrderEnabled(false);
     setIsScheduleConfiguratorOpen(false);
   }, [schedulableDayOptions]);
+
+  useEffect(() => {
+    if (schedulableDayOptions.length === 0) {
+      return;
+    }
+
+    const firstDay = schedulableDayOptions[0];
+    const firstSlot = firstDay.slots[0]?.value || "";
+
+    const selectedDay =
+      schedulableDayOptions.find((day) => day.key === selectedScheduledDayKey) ||
+      firstDay;
+    const selectedSlotIsValid = selectedDay.slots.some(
+      (slot) => slot.value === selectedScheduledSlot
+    );
+
+    if (selectedDay.key !== selectedScheduledDayKey) {
+      setSelectedScheduledDayKey(selectedDay.key);
+    }
+
+    if (!selectedSlotIsValid) {
+      setSelectedScheduledSlot(selectedDay.slots[0]?.value || firstSlot);
+    }
+
+    const draftDay =
+      schedulableDayOptions.find((day) => day.key === draftScheduledDayKey) ||
+      firstDay;
+    const draftSlotIsValid = draftDay.slots.some(
+      (slot) => slot.value === draftScheduledSlot
+    );
+
+    if (draftDay.key !== draftScheduledDayKey) {
+      setDraftScheduledDayKey(draftDay.key);
+    }
+
+    if (!draftSlotIsValid) {
+      setDraftScheduledSlot(draftDay.slots[0]?.value || firstSlot);
+    }
+  }, [
+    draftScheduledDayKey,
+    draftScheduledSlot,
+    schedulableDayOptions,
+    selectedScheduledDayKey,
+    selectedScheduledSlot,
+  ]);
 
   useEffect(() => {
     async function loadMenu() {

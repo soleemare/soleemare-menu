@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { useRouter } from "next/navigation";
 
@@ -12,13 +12,7 @@ type OrderRow = {
   created_at: string;
   customer_id: string | null;
   status: string | null;
-};
-
-type CustomerRow = {
-  id: string;
-  name: string | null;
-  email: string | null;
-  phone: string | null;
+  scheduled_for: string | null;
 };
 
 type OrderItemRow = {
@@ -30,14 +24,74 @@ type OrderItemRow = {
   line_total: number;
 };
 
-type FilterType = "all" | "weekly" | "monthly" | "custom";
+type FilterType = "today" | "weekly" | "monthly" | "custom";
+type ChartPaymentFilter = "all" | string;
 
 type DashboardResponse = {
   ok: boolean;
   orders?: OrderRow[];
-  customers?: CustomerRow[];
   orderItems?: OrderItemRow[];
 };
+
+type ChartPoint = {
+  label: string;
+  value: number;
+  fullLabel: string;
+};
+
+const CLP_FORMATTER = new Intl.NumberFormat("es-CL");
+const HEATMAP_DAY_LABELS = ["Lun.", "Mar.", "Mié.", "Jue.", "Vie.", "Sáb.", "Dom."];
+const HEATMAP_START_HOUR = 13;
+const HEATMAP_END_HOUR = 23;
+
+const LIVE_STATUSES = new Set([
+  "pending",
+  "accepted",
+  "preparing",
+  "ready_for_pickup",
+  "delivering",
+]);
+
+
+function startOfDay(date: Date) {
+  const next = new Date(date);
+  next.setHours(0, 0, 0, 0);
+  return next;
+}
+
+function endOfDay(date: Date) {
+  const next = new Date(date);
+  next.setHours(23, 59, 59, 999);
+  return next;
+}
+
+function formatCurrency(value: number) {
+  return `$${CLP_FORMATTER.format(Math.round(value || 0))}`;
+}
+
+function barColor(index: number) {
+  const colors = ["#046703", "#69adb6", "#f48e07", "#f6070b", "#8fb996"];
+  return colors[index % colors.length];
+}
+
+function heatmapColor(value: number, maxValue: number) {
+  if (value <= 0 || maxValue <= 0) {
+    return "#f2f5ef";
+  }
+
+  const ratio = value / maxValue;
+
+  if (ratio >= 0.85) return "#046703";
+  if (ratio >= 0.65) return "#2f8f39";
+  if (ratio >= 0.45) return "#69adb6";
+  if (ratio >= 0.25) return "#cfe8ca";
+  return "#e7f2e4";
+}
+
+function heatmapTextColor(value: number, maxValue: number) {
+  if (value <= 0 || maxValue <= 0) return "#8b948b";
+  return value / maxValue >= 0.65 ? "#ffffff" : "#234022";
+}
 
 export default function AdminPage() {
   const router = useRouter();
@@ -45,17 +99,14 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [orders, setOrders] = useState<OrderRow[]>([]);
-  const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [orderItems, setOrderItems] = useState<OrderItemRow[]>([]);
 
-  const [filterType, setFilterType] = useState<FilterType>("all");
+  const [filterType, setFilterType] = useState<FilterType>("weekly");
   const [startDate, setStartDate] = useState("");
-  const [startHour, setStartHour] = useState("00:00");
   const [endDate, setEndDate] = useState("");
-  const [endHour, setEndHour] = useState("23:59");
-
-  const [page, setPage] = useState(1);
-  const ITEMS_PER_PAGE = 5;
+  const [chartPaymentFilter, setChartPaymentFilter] =
+    useState<ChartPaymentFilter>("all");
+  const [topProductsPage, setTopProductsPage] = useState(1);
 
   useEffect(() => {
     const load = async () => {
@@ -86,10 +137,9 @@ export default function AdminPage() {
         }
 
         setOrders(data.orders || []);
-        setCustomers(data.customers || []);
         setOrderItems(data.orderItems || []);
-      } catch (error: unknown) {
-        console.error("Error dashboard:", error);
+      } catch (loadError: unknown) {
+        console.error("Error dashboard:", loadError);
         setError("No se pudo cargar el dashboard en este momento.");
       } finally {
         setLoading(false);
@@ -99,145 +149,258 @@ export default function AdminPage() {
     load();
   }, [router]);
 
-  const customerMap = useMemo(() => {
-    return new Map(customers.map((c) => [c.id, c]));
-  }, [customers]);
+  const now = useMemo(() => new Date(), []);
+  const todayStart = useMemo(() => startOfDay(now), [now]);
+  const todayEnd = useMemo(() => endOfDay(now), [now]);
 
-  const filteredOrders = orders.filter((order) => {
-    const now = new Date();
-    const orderDate = new Date(order.created_at);
+  const filterRange = useMemo(() => {
+    if (filterType === "today") {
+      return { start: todayStart, end: todayEnd };
+    }
 
     if (filterType === "weekly") {
-      const weekAgo = new Date();
-      weekAgo.setDate(now.getDate() - 7);
-      return orderDate >= weekAgo && orderDate <= now;
+      const start = startOfDay(now);
+      start.setDate(start.getDate() - 6);
+      return { start, end: todayEnd };
     }
 
     if (filterType === "monthly") {
-      const monthAgo = new Date();
-      monthAgo.setMonth(now.getMonth() - 1);
-      return orderDate >= monthAgo && orderDate <= now;
+      const start = startOfDay(now);
+      start.setDate(start.getDate() - 29);
+      return { start, end: todayEnd };
     }
 
-    if (filterType === "custom") {
-      if (!startDate || !endDate) return true;
-
-      const start = new Date(`${startDate}T${startHour || "00:00"}:00`);
-      const end = new Date(`${endDate}T${endHour || "23:59"}:59`);
-
-      return orderDate >= start && orderDate <= end;
+    if (startDate && endDate) {
+      return {
+        start: startOfDay(new Date(`${startDate}T00:00:00`)),
+        end: endOfDay(new Date(`${endDate}T00:00:00`)),
+      };
     }
 
-    return true;
-  });
+    return null;
+  }, [endDate, filterType, now, startDate, todayEnd, todayStart]);
+
+  const filteredOrders = useMemo(() => {
+    if (!filterRange) return orders;
+
+    return orders.filter((order) => {
+      const createdAt = new Date(order.created_at);
+      return createdAt >= filterRange.start && createdAt <= filterRange.end;
+    });
+  }, [filterRange, orders]);
 
   const filteredOrderIds = useMemo(() => {
-    return new Set(filteredOrders.map((o) => o.id));
+    return new Set(filteredOrders.map((order) => order.id));
   }, [filteredOrders]);
 
   const filteredOrderItems = useMemo(() => {
     return orderItems.filter((item) => filteredOrderIds.has(item.order_id));
-  }, [orderItems, filteredOrderIds]);
+  }, [filteredOrderIds, orderItems]);
 
-  const totalVentas = useMemo(
-    () => filteredOrders.reduce((acc, o) => acc + Number(o.total || 0), 0),
-    [filteredOrders]
-  );
-
-  const totalPedidos = filteredOrders.length;
-
-  const clientesUnicos = useMemo(() => {
-    return new Set(filteredOrders.map((o) => o.customer_id).filter(Boolean))
-      .size;
+  const availablePaymentMethods = useMemo(() => {
+    return Array.from(
+      new Set(
+        filteredOrders
+          .map((order) => order.payment_method?.trim())
+          .filter((value): value is string => Boolean(value))
+      )
+    ).sort((a, b) => a.localeCompare(b, "es"));
   }, [filteredOrders]);
 
-  const ticketPromedio = totalPedidos > 0 ? totalVentas / totalPedidos : 0;
+  const chartOrders = useMemo(() => {
+    if (chartPaymentFilter === "all") return filteredOrders;
 
-  const ventasHoy = useMemo(() => {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
+    return filteredOrders.filter(
+      (order) => (order.payment_method || "Sin definir") === chartPaymentFilter
+    );
+  }, [chartPaymentFilter, filteredOrders]);
+
+  const salesToday = useMemo(() => {
     return orders
-      .filter((o) => new Date(o.created_at) >= start)
-      .reduce((acc, o) => acc + Number(o.total || 0), 0);
+      .filter((order) => {
+        const createdAt = new Date(order.created_at);
+        return createdAt >= todayStart && createdAt <= todayEnd;
+      })
+      .reduce((sum, order) => sum + Number(order.total || 0), 0);
+  }, [orders, todayEnd, todayStart]);
+
+  const ordersToday = useMemo(() => {
+    return orders.filter((order) => {
+      const createdAt = new Date(order.created_at);
+      return createdAt >= todayStart && createdAt <= todayEnd;
+    }).length;
+  }, [orders, todayEnd, todayStart]);
+
+  const liveOrders = useMemo(() => {
+    return orders.filter((order) => LIVE_STATUSES.has(order.status || ""));
   }, [orders]);
 
-  const pedidosHoy = useMemo(() => {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    return orders.filter((o) => new Date(o.created_at) >= start).length;
+  const scheduledOrders = useMemo(() => {
+    return orders.filter((order) => order.status === "scheduled");
   }, [orders]);
 
-  const topClientes = useMemo(() => {
-    const grouped = new Map<
-      string,
-      {
-        name: string;
-        email: string;
-        phone: string;
-        pedidos: number;
-        total: number;
-      }
-    >();
+  const totalSales = useMemo(() => {
+    return filteredOrders.reduce((sum, order) => sum + Number(order.total || 0), 0);
+  }, [filteredOrders]);
 
-    filteredOrders.forEach((order) => {
-      if (!order.customer_id) return;
-      const customer = customerMap.get(order.customer_id);
-      if (!customer) return;
+  const totalOrders = filteredOrders.length;
 
-      const key = order.customer_id;
-      const current = grouped.get(key) || {
-        name: customer.name || "Sin nombre",
-        email: customer.email || "-",
-        phone: customer.phone || "-",
-        pedidos: 0,
-        total: 0,
-      };
+  const averageTicket = totalOrders > 0 ? totalSales / totalOrders : 0;
 
-      current.pedidos += 1;
-      current.total += Number(order.total || 0);
-      grouped.set(key, current);
+  const deliveryCount = useMemo(() => {
+    return filteredOrders.filter((order) => order.delivery_type === "delivery")
+      .length;
+  }, [filteredOrders]);
+
+  const pickupCount = useMemo(() => {
+    return filteredOrders.filter((order) => order.delivery_type === "pickup")
+      .length;
+  }, [filteredOrders]);
+
+  const chartData = useMemo<ChartPoint[]>(() => {
+    if (!filterRange) return [];
+
+    const map = new Map<string, ChartPoint>();
+    const cursor = new Date(filterRange.start);
+
+    while (cursor <= filterRange.end) {
+      const key = cursor.toISOString().slice(0, 10);
+      map.set(key, {
+        label: cursor.toLocaleDateString("es-CL", {
+          day: "numeric",
+          month: "short",
+        }),
+        value: 0,
+        fullLabel: cursor.toLocaleDateString("es-CL", {
+          weekday: "short",
+          day: "numeric",
+          month: "short",
+        }),
+      });
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    chartOrders.forEach((order) => {
+      const date = new Date(order.created_at);
+      const key = date.toISOString().slice(0, 10);
+      const current = map.get(key);
+      if (!current) return;
+      current.value += Number(order.total || 0);
     });
 
-    return Array.from(grouped.values())
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 5);
-  }, [filteredOrders, customerMap]);
+    return Array.from(map.values());
+  }, [chartOrders, filterRange]);
 
-  const topProductos = useMemo(() => {
+  const maxChartValue = useMemo(() => {
+    return Math.max(...chartData.map((point) => point.value), 1);
+  }, [chartData]);
+
+  const topProducts = useMemo(() => {
     const grouped = new Map<
       string,
-      { nombre: string; cantidad: number; total: number }
+      { name: string; quantity: number; total: number }
     >();
 
     filteredOrderItems.forEach((item) => {
       const current = grouped.get(item.product_name) || {
-        nombre: item.product_name,
-        cantidad: 0,
+        name: item.product_name,
+        quantity: 0,
         total: 0,
       };
 
-      current.cantidad += Number(item.quantity || 0);
+      current.quantity += Number(item.quantity || 0);
       current.total += Number(item.line_total || 0);
       grouped.set(item.product_name, current);
     });
 
     return Array.from(grouped.values())
-      .sort((a, b) => b.cantidad - a.cantidad)
+      .sort((a, b) => b.total - a.total)
       .slice(0, 5);
   }, [filteredOrderItems]);
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil(filteredOrders.length / ITEMS_PER_PAGE)
-  );
+  const paymentSummary = useMemo(() => {
+    const grouped = new Map<string, number>();
 
-  const currentPage = Math.min(page, totalPages);
+    filteredOrders.forEach((order) => {
+      const key = order.payment_method || "Sin definir";
+      grouped.set(key, (grouped.get(key) || 0) + 1);
+    });
 
-  const paginatedOrders = useMemo(() => {
-    const start = (currentPage - 1) * ITEMS_PER_PAGE;
-    const end = start + ITEMS_PER_PAGE;
-    return filteredOrders.slice(start, end);
-  }, [currentPage, filteredOrders]);
+    return Array.from(grouped.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 4);
+  }, [filteredOrders]);
+
+  const chartFilteredSales = useMemo(() => {
+    return chartOrders.reduce((sum, order) => sum + Number(order.total || 0), 0);
+  }, [chartOrders]);
+
+  const chartFilteredOrdersCount = chartOrders.length;
+  const topProductsTotalPages = Math.max(1, Math.ceil(topProducts.length / 3));
+  const visibleTopProducts = useMemo(() => {
+    const start = (topProductsPage - 1) * 3;
+    return topProducts.slice(start, start + 3);
+  }, [topProducts, topProductsPage]);
+
+  const hourlyHeatmap = useMemo(() => {
+    const cells = new Map<string, number>();
+
+    chartOrders.forEach((order) => {
+      const createdAt = new Date(order.created_at);
+      const rawDay = createdAt.getDay();
+      const dayIndex = rawDay === 0 ? 6 : rawDay - 1;
+      const hour = createdAt.getHours();
+      const key = `${dayIndex}-${hour}`;
+
+      cells.set(key, (cells.get(key) || 0) + Number(order.total || 0));
+    });
+
+    return Array.from(
+      { length: HEATMAP_END_HOUR - HEATMAP_START_HOUR + 1 },
+      (_, index) => HEATMAP_START_HOUR + index
+    ).map((hour) =>
+      HEATMAP_DAY_LABELS.map((_, dayIndex) => ({
+        dayIndex,
+        hour,
+        value: cells.get(`${dayIndex}-${hour}`) || 0,
+      }))
+    );
+  }, [chartOrders]);
+
+  const heatmapMaxValue = useMemo(() => {
+    return Math.max(
+      1,
+      ...hourlyHeatmap.flatMap((row) => row.map((cell) => cell.value))
+    );
+  }, [hourlyHeatmap]);
+
+  const heatmapLegendValues = useMemo(() => {
+    return [
+      0,
+      Math.round(heatmapMaxValue * 0.25),
+      Math.round(heatmapMaxValue * 0.5),
+      Math.round(heatmapMaxValue * 0.75),
+      heatmapMaxValue,
+    ];
+  }, [heatmapMaxValue]);
+
+  const filterButtonClass = (type: FilterType) =>
+    `rounded-full px-4 py-2 text-sm font-semibold transition ${
+      filterType === type
+        ? "bg-[#046703] text-white shadow-sm"
+        : "bg-white text-[#046703] hover:bg-[#eef8ec]"
+    }`;
+
+  useEffect(() => {
+    setTopProductsPage(1);
+  }, [filterType, startDate, endDate, chartPaymentFilter, topProducts.length]);
+
+  useEffect(() => {
+    if (topProductsPage > topProductsTotalPages) {
+      setTopProductsPage(topProductsTotalPages);
+    }
+  }, [topProductsPage, topProductsTotalPages]);
 
   if (loading) {
     return (
@@ -258,405 +421,444 @@ export default function AdminPage() {
     );
   }
 
-  const filterButtonClass = (type: FilterType) =>
-    `rounded-2xl px-4 py-2 text-sm font-medium transition ${
-      filterType === type
-        ? "bg-[#f6070b] text-white shadow-sm"
-        : "bg-[#c9dfc3] text-[#046703] hover:bg-[#69adb6] hover:text-white"
-    }`;
-
   return (
-    <div className="space-y-8">
-      <section className="rounded-3xl border border-[#c9dfc3] bg-white p-6 shadow-sm">
-        <div className="mb-4 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-          <div>
-            <p className="text-sm uppercase tracking-[0.25em] text-[#69adb6]">
-              Panel general
+    <div className="space-y-6">
+      <section className="rounded-[2rem] border border-[#dcebd7] bg-gradient-to-br from-white via-[#f7fbf6] to-[#edf8fa] p-6 shadow-sm">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="max-w-2xl">
+            <p className="text-sm uppercase tracking-[0.35em] text-[#69adb6]">
+              Tablero
             </p>
-            <h1 className="mt-2 text-3xl font-bold text-[#046703]">
+            <h1 className="mt-2 text-4xl font-bold tracking-tight text-[#111111]">
               Dashboard
             </h1>
-            <p className="mt-1 text-sm text-neutral-600">
-              Revisa ventas, productos, clientes y comportamiento del día.
+            <p className="mt-3 text-sm leading-6 text-neutral-600">
+              Un resumen rápido del negocio: ventas, pedidos en curso,
+              programados y comportamiento diario para que veamos todo lo más
+              importante en una sola pantalla.
             </p>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => {
-                setFilterType("all");
-                setPage(1);
-              }}
-              className={filterButtonClass("all")}
-            >
-              Todo
-            </button>
-            <button
-              onClick={() => {
-                setFilterType("weekly");
-                setPage(1);
-              }}
-              className={filterButtonClass("weekly")}
-            >
-              Semanal
-            </button>
-            <button
-              onClick={() => {
-                setFilterType("monthly");
-                setPage(1);
-              }}
-              className={filterButtonClass("monthly")}
-            >
-              Mensual
-            </button>
-            <button
-              onClick={() => {
-                setFilterType("custom");
-                setPage(1);
-              }}
-              className={filterButtonClass("custom")}
-            >
-              Personalizado
-            </button>
-          </div>
-        </div>
-
-        {filterType === "custom" && (
-          <div className="grid gap-3 border-t border-[#c9dfc3] pt-4 md:grid-cols-2 xl:grid-cols-5">
-            <div>
-              <label className="mb-1 block text-sm text-neutral-600">
-                Fecha inicio
-              </label>
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => {
-                  setStartDate(e.target.value);
-                  setPage(1);
-                }}
-                className="w-full rounded-xl border border-[#c9dfc3] bg-white p-3 text-neutral-800 outline-none transition focus:border-[#69adb6] focus:ring-2 focus:ring-[#69adb6]/20"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm text-neutral-600">
-                Hora inicio
-              </label>
-              <input
-                type="time"
-                value={startHour}
-                onChange={(e) => {
-                  setStartHour(e.target.value);
-                  setPage(1);
-                }}
-                className="w-full rounded-xl border border-[#c9dfc3] bg-white p-3 text-neutral-800 outline-none transition focus:border-[#69adb6] focus:ring-2 focus:ring-[#69adb6]/20"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm text-neutral-600">
-                Fecha fin
-              </label>
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) => {
-                  setEndDate(e.target.value);
-                  setPage(1);
-                }}
-                className="w-full rounded-xl border border-[#c9dfc3] bg-white p-3 text-neutral-800 outline-none transition focus:border-[#69adb6] focus:ring-2 focus:ring-[#69adb6]/20"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm text-neutral-600">
-                Hora fin
-              </label>
-              <input
-                type="time"
-                value={endHour}
-                onChange={(e) => {
-                  setEndHour(e.target.value);
-                  setPage(1);
-                }}
-                className="w-full rounded-xl border border-[#c9dfc3] bg-white p-3 text-neutral-800 outline-none transition focus:border-[#69adb6] focus:ring-2 focus:ring-[#69adb6]/20"
-              />
-            </div>
-
-            <div className="flex items-end">
+          <div className="rounded-[1.75rem] border border-[#dcebd7] bg-white/90 p-3 shadow-sm">
+            <div className="flex flex-wrap gap-2">
               <button
-                onClick={() => {
-                  setStartDate("");
-                  setStartHour("00:00");
-                  setEndDate("");
-                  setEndHour("23:59");
-                  setFilterType("all");
-                  setPage(1);
-                }}
-                className="w-full rounded-xl bg-[#c9dfc3] px-4 py-3 text-sm font-medium text-[#046703] transition hover:bg-[#69adb6] hover:text-white"
+                type="button"
+                onClick={() => setFilterType("today")}
+                className={filterButtonClass("today")}
               >
-                Limpiar filtro
+                Hoy
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterType("weekly")}
+                className={filterButtonClass("weekly")}
+              >
+                7 días
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterType("monthly")}
+                className={filterButtonClass("monthly")}
+              >
+                30 días
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterType("custom")}
+                className={filterButtonClass("custom")}
+              >
+                Personalizado
               </button>
             </div>
-          </div>
-        )}
-      </section>
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <div className="rounded-3xl bg-[#69adb6] p-6 text-white shadow-sm">
-          <p className="text-sm text-white/80">Ventas hoy</p>
-          <p className="mt-2 text-4xl font-bold">
-            ${ventasHoy.toLocaleString("es-CL")}
-          </p>
-          <p className="mt-2 text-sm text-white/80">
-            Movimiento del día actual
-          </p>
-        </div>
-
-        <div className="rounded-3xl bg-[#f6070b] p-6 text-white shadow-sm">
-          <p className="text-sm text-white/80">Pedidos hoy</p>
-          <p className="mt-2 text-4xl font-bold">{pedidosHoy}</p>
-          <p className="mt-2 text-sm text-white/80">Pedidos creados hoy</p>
-        </div>
-
-        <div className="rounded-3xl border border-[#c9dfc3] bg-white p-6 shadow-sm">
-          <p className="text-sm text-neutral-500">Ventas totales</p>
-          <p className="mt-2 text-3xl font-bold text-[#046703]">
-            ${totalVentas.toLocaleString("es-CL")}
-          </p>
-        </div>
-
-        <div className="rounded-3xl border border-[#c9dfc3] bg-white p-6 shadow-sm">
-          <p className="text-sm text-neutral-500">Pedidos</p>
-          <p className="mt-2 text-3xl font-bold text-[#69adb6]">
-            {totalPedidos}
-          </p>
-        </div>
-
-        <div className="rounded-3xl border border-[#c9dfc3] bg-white p-6 shadow-sm">
-          <p className="text-sm text-neutral-500">Clientes únicos</p>
-          <p className="mt-2 text-3xl font-bold text-[#046703]">
-            {clientesUnicos}
-          </p>
-        </div>
-
-        <div className="rounded-3xl border border-[#c9dfc3] bg-white p-6 shadow-sm">
-          <p className="text-sm text-neutral-500">Ticket promedio</p>
-          <p className="mt-2 text-3xl font-bold text-[#f48e07]">
-            ${Math.round(ticketPromedio).toLocaleString("es-CL")}
-          </p>
-        </div>
-      </section>
-
-      <div className="grid items-start gap-6 xl:grid-cols-[1.8fr_1fr]">
-        <section className="self-start rounded-3xl border border-[#c9dfc3] bg-white p-6 shadow-sm">
-          <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <h2 className="text-2xl font-bold text-[#046703]">
-                Últimos pedidos
-              </h2>
-              <p className="mt-1 text-sm text-neutral-500">
-                Mostrando {paginatedOrders.length} de {filteredOrders.length}
-              </p>
-            </div>
-
-            {filteredOrders.length > 0 && (
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setPage((p) => Math.max(p - 1, 1))}
-                  disabled={page === 1}
-                  className="rounded-xl border border-[#c9dfc3] px-4 py-2 text-sm font-medium text-[#046703] transition hover:bg-[#c9dfc3] disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  ← Anterior
-                </button>
-
-                <span className="text-sm text-neutral-500">
-                    Página {currentPage} de {totalPages}
-                </span>
-
-                <button
-                  onClick={() =>
-                    setPage((p) => Math.min(p + 1, totalPages))
-                  }
-                  disabled={page === totalPages}
-                  className="rounded-xl border border-[#c9dfc3] px-4 py-2 text-sm font-medium text-[#046703] transition hover:bg-[#c9dfc3] disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Siguiente →
-                </button>
+            {filterType === "custom" && (
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(event) => setStartDate(event.target.value)}
+                  className="rounded-2xl border border-[#c9dfc3] bg-white px-4 py-3 text-sm text-neutral-800 outline-none transition focus:border-[#69adb6] focus:ring-2 focus:ring-[#69adb6]/20"
+                />
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(event) => setEndDate(event.target.value)}
+                  className="rounded-2xl border border-[#c9dfc3] bg-white px-4 py-3 text-sm text-neutral-800 outline-none transition focus:border-[#69adb6] focus:ring-2 focus:ring-[#69adb6]/20"
+                />
               </div>
             )}
           </div>
+        </div>
+      </section>
 
-          <div className="space-y-3">
-            {paginatedOrders.map((order) => {
-              const customer = order.customer_id
-                ? customerMap.get(order.customer_id)
-                : null;
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <article className="rounded-[2rem] bg-[#046703] p-6 text-white shadow-sm">
+          <p className="text-sm text-white/75">Ventas hoy</p>
+          <p className="mt-3 text-4xl font-bold">{formatCurrency(salesToday)}</p>
+          <p className="mt-2 text-sm text-white/75">
+            {ordersToday} pedidos registrados hoy
+          </p>
+        </article>
 
-              return (
-                <div
-                  key={order.id}
-                  className="rounded-2xl border border-[#c9dfc3] bg-[#c9dfc3]/20 p-4 transition hover:shadow-sm"
-                >
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="min-w-0">
-                      <p className="font-semibold text-neutral-900">
-                        {customer?.name || "Sin nombre"}
-                      </p>
-                      <p className="text-xs text-neutral-500">
-                        {customer?.email || "-"} • {customer?.phone || "-"}
-                      </p>
-                    </div>
+        <article className="rounded-[2rem] border border-[#dcebd7] bg-white p-6 shadow-sm">
+          <p className="text-sm text-neutral-500">Ventas del período</p>
+          <p className="mt-3 text-4xl font-bold text-[#111111]">
+            {formatCurrency(totalSales)}
+          </p>
+          <p className="mt-2 text-sm text-neutral-500">
+            Ticket promedio {formatCurrency(averageTicket)}
+          </p>
+        </article>
 
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
-                      <span className="rounded-full border border-[#c9dfc3] bg-white px-3 py-1 text-[#046703]">
-                        {order.delivery_type || "-"}
-                      </span>
-                      <span className="rounded-full border border-[#c9dfc3] bg-white px-3 py-1 text-[#046703]">
-                        {order.payment_method || "-"}
-                      </span>
-                      <span className="rounded-full border border-[#c9dfc3] bg-white px-3 py-1 text-[#046703]">
-                        {order.status || "-"}
-                      </span>
-                    </div>
-                  </div>
+        <article className="rounded-[2rem] border border-[#dcebd7] bg-white p-6 shadow-sm">
+          <p className="text-sm text-neutral-500">Pedidos activos</p>
+          <p className="mt-3 text-4xl font-bold text-[#046703]">
+            {liveOrders.length}
+          </p>
+          <p className="mt-2 text-sm text-neutral-500">
+            En curso ahora mismo
+          </p>
+        </article>
 
-                  <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                    <p className="text-sm text-neutral-500">
-                      {new Date(order.created_at).toLocaleString("es-CL")}
-                    </p>
-                    <p className="text-lg font-bold text-[#f6070b]">
-                      ${Number(order.total || 0).toLocaleString("es-CL")}
-                    </p>
-                  </div>
-                </div>
-              );
-            })}
+        <article className="rounded-[2rem] border border-[#dcebd7] bg-white p-6 shadow-sm">
+          <p className="text-sm text-neutral-500">Programados</p>
+          <p className="mt-3 text-4xl font-bold text-[#f48e07]">
+            {scheduledOrders.length}
+          </p>
+          <p className="mt-2 text-sm text-neutral-500">
+            Pendientes para más tarde
+          </p>
+        </article>
+      </section>
 
-            {filteredOrders.length === 0 && (
-              <p className="text-sm text-neutral-500">
-                No hay pedidos para este período.
+      <section className="grid gap-6 xl:grid-cols-[1.7fr_1fr]">
+        <article className="rounded-[2rem] border border-[#dcebd7] bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-sm uppercase tracking-[0.3em] text-[#69adb6]">
+                Ventas
               </p>
-            )}
+              <h2 className="mt-2 text-3xl font-bold text-[#111111]">
+                Rendimiento diario
+              </h2>
+              <p className="mt-2 text-sm text-neutral-500">
+                Visualiza cómo se va moviendo la venta dentro del período
+                elegido.
+              </p>
+            </div>
+
+            <div className="grid gap-3 lg:min-w-[420px] sm:grid-cols-2 xl:grid-cols-[1.2fr_1fr_1fr]">
+              <div className="rounded-2xl bg-[#f7fbf6] p-4">
+                <label
+                  htmlFor="chart-payment-filter"
+                  className="text-xs uppercase tracking-[0.25em] text-neutral-400"
+                >
+                  Medio de pago
+                </label>
+                <select
+                  id="chart-payment-filter"
+                  value={chartPaymentFilter}
+                  onChange={(event) => setChartPaymentFilter(event.target.value)}
+                  className="mt-2 w-full rounded-xl border border-[#dcebd7] bg-white px-3 py-2 text-sm font-semibold text-[#111111] outline-none transition focus:border-[#69adb6] focus:ring-2 focus:ring-[#69adb6]/20"
+                >
+                  <option value="all">Todos</option>
+                  <option value="Sin definir">Sin definir</option>
+                  {availablePaymentMethods.map((method) => (
+                    <option key={method} value={method}>
+                      {method}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="rounded-2xl bg-[#f7fbf6] p-4">
+                <p className="text-xs uppercase tracking-[0.25em] text-neutral-400">
+                  Pedidos
+                </p>
+                <p className="mt-2 text-2xl font-bold text-[#111111]">
+                  {chartFilteredOrdersCount}
+                </p>
+                <p className="mt-1 text-xs text-neutral-500">
+                  {chartPaymentFilter === "all" ? "Todos" : chartPaymentFilter}
+                </p>
+              </div>
+              <div className="rounded-2xl bg-[#f7fbf6] p-4">
+                <p className="text-xs uppercase tracking-[0.25em] text-neutral-400">
+                  Ventas
+                </p>
+                <p className="mt-2 text-2xl font-bold text-[#111111]">
+                  {formatCurrency(chartFilteredSales)}
+                </p>
+                <p className="mt-1 text-xs text-neutral-500">
+                  Solo del filtro seleccionado
+                </p>
+              </div>
+            </div>
           </div>
-        </section>
+
+          <div className="mt-8">
+            <div className="flex h-[300px] items-end gap-3 overflow-x-auto rounded-[1.75rem] bg-[#fbf7ef] px-4 pb-6 pt-8">
+              {chartData.map((point, index) => (
+                <div
+                  key={`${point.fullLabel}-${index}`}
+                  className="flex min-w-[70px] flex-1 flex-col items-center justify-end gap-3"
+                >
+                  <span className="text-xs font-semibold text-neutral-500">
+                    {point.value > 0 ? formatCurrency(point.value) : "$0"}
+                  </span>
+                  <div className="flex h-[190px] items-end">
+                    <div
+                      className="w-12 rounded-t-[1rem] transition-all"
+                      style={{
+                        height: `${Math.max(
+                          (point.value / maxChartValue) * 180,
+                          point.value > 0 ? 14 : 4
+                        )}px`,
+                        backgroundColor: barColor(index),
+                      }}
+                      title={`${point.fullLabel}: ${formatCurrency(point.value)}`}
+                    />
+                  </div>
+                  <span className="text-center text-xs font-medium text-neutral-500">
+                    {point.label}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-8 rounded-[1.75rem] border border-[#dcebd7] bg-[#fcfdfb] p-5">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="text-sm uppercase tracking-[0.3em] text-[#69adb6]">
+                  Ventas por hora
+                </p>
+                <h3 className="mt-2 text-2xl font-bold text-[#111111]">
+                  Mapa semanal de actividad
+                </h3>
+                <p className="mt-2 text-sm text-neutral-500">
+                  Mira rápido qué días y horarios concentran más ventas dentro
+                  del filtro elegido.
+                </p>
+              </div>
+              <div className="rounded-full border border-[#dcebd7] bg-white px-4 py-2 text-xs font-semibold text-neutral-500">
+                {chartPaymentFilter === "all"
+                  ? "Todos los medios de pago"
+                  : `Filtro: ${chartPaymentFilter}`}
+              </div>
+            </div>
+
+            <div className="mt-6 overflow-x-auto">
+              <div className="min-w-[760px]">
+                <div
+                  className="grid gap-2"
+                  style={{ gridTemplateColumns: "56px repeat(7, minmax(0, 1fr))" }}
+                >
+                  <div />
+                  {HEATMAP_DAY_LABELS.map((day) => (
+                    <div
+                      key={day}
+                      className="pb-2 text-center text-sm font-semibold text-neutral-500"
+                    >
+                      {day}
+                    </div>
+                  ))}
+
+                  {hourlyHeatmap.map((row, rowIndex) => (
+                    <Fragment key={`heatmap-row-${rowIndex}`}>
+                      <div className="flex h-8 items-center text-sm font-medium text-neutral-500">
+                        {String(row[0].hour).padStart(2, "0")}
+                      </div>
+                      {row.map((cell) => {
+                        const cellColor = heatmapColor(
+                          cell.value,
+                          heatmapMaxValue
+                        );
+                        const textColor = heatmapTextColor(
+                          cell.value,
+                          heatmapMaxValue
+                        );
+
+                        return (
+                          <div
+                            key={`heatmap-${cell.dayIndex}-${cell.hour}`}
+                            className="flex h-8 items-center justify-center rounded-lg border border-white/70 text-[11px] font-semibold transition-transform hover:scale-[1.02]"
+                            style={{
+                              backgroundColor: cellColor,
+                              color: textColor,
+                            }}
+                            title={`${HEATMAP_DAY_LABELS[cell.dayIndex]} ${String(
+                              cell.hour
+                            ).padStart(2, "0")}:00 - ${formatCurrency(cell.value)}`}
+                          >
+                            {cell.value > 0 ? formatCurrency(cell.value) : "—"}
+                          </div>
+                        );
+                      })}
+                    </Fragment>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-wrap items-center gap-3 text-xs text-neutral-500">
+              <span className="font-semibold text-neutral-600">Intensidad</span>
+              {heatmapLegendValues.map((value, index) => (
+                <div key={`legend-${index}`} className="flex items-center gap-2">
+                  <span
+                    className="inline-block h-3 w-8 rounded-full"
+                    style={{
+                      backgroundColor: heatmapColor(value, heatmapMaxValue),
+                    }}
+                  />
+                  <span>{formatCurrency(value)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </article>
 
         <div className="space-y-6">
-          <section className="rounded-3xl border border-[#c9dfc3] bg-white p-6 shadow-sm">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-[#046703]">
-                Top 5 productos
-              </h2>
-              <span className="text-sm text-neutral-500">
-                {topProductos.length} resultados
+          <article className="rounded-[2rem] border border-[#dcebd7] bg-white p-6 shadow-sm">
+            <p className="text-sm uppercase tracking-[0.3em] text-[#69adb6]">
+              Mix de venta
+            </p>
+            <h2 className="mt-2 text-2xl font-bold text-[#111111]">
+              Cómo se está vendiendo
+            </h2>
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-[#dcebd7] p-4">
+                <p className="text-sm text-neutral-500">Delivery</p>
+                <p className="mt-2 text-3xl font-bold text-[#046703]">
+                  {deliveryCount}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-[#dcebd7] p-4">
+                <p className="text-sm text-neutral-500">Retiro</p>
+                <p className="mt-2 text-3xl font-bold text-[#69adb6]">
+                  {pickupCount}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {paymentSummary.map((payment) => (
+                <div
+                  key={payment.name}
+                  className="flex items-center justify-between rounded-2xl bg-[#f7fbf6] px-4 py-3"
+                >
+                  <span className="text-sm font-medium text-[#111111]">
+                    {payment.name}
+                  </span>
+                  <span className="rounded-full bg-white px-3 py-1 text-sm font-semibold text-[#046703]">
+                    {payment.count}
+                  </span>
+                </div>
+              ))}
+
+              {paymentSummary.length === 0 && (
+                <p className="text-sm text-neutral-500">
+                  Aún no hay medios de pago registrados en este período.
+                </p>
+              )}
+            </div>
+          </article>
+          <article className="rounded-[2rem] border border-[#dcebd7] bg-white p-5 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm uppercase tracking-[0.3em] text-[#69adb6]">
+                  Menú
+                </p>
+                <h2 className="mt-2 text-2xl font-bold text-[#111111]">
+                  Top productos
+                </h2>
+              </div>
+              <span className="rounded-full bg-[#fff4e5] px-3 py-1 text-sm font-semibold text-[#b86100]">
+                {topProducts.length}
               </span>
             </div>
 
-            <div className="space-y-3">
-              {topProductos.map((producto, index) => (
+            <div className="mt-5 space-y-3">
+              {visibleTopProducts.map((product, index) => (
                 <div
-                  key={`${producto.nombre}-${index}`}
-                  className="rounded-2xl border border-[#c9dfc3] bg-[#c9dfc3]/20 p-4"
+                  key={`${product.name}-${topProductsPage}-${index}`}
+                  className="rounded-2xl border border-[#dcebd7] p-4"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="truncate font-medium text-[#046703]">
-                        {producto.nombre}
-                      </div>
-                      <div className="mt-1 text-sm text-neutral-600">
-                        Vendidos: {producto.cantidad}
-                      </div>
+                      <p className="line-clamp-2 font-semibold text-[#111111]">
+                        {product.name}
+                      </p>
+                      <p className="mt-1 text-sm text-neutral-500">
+                        {product.quantity} vendidos
+                      </p>
                     </div>
-                    <span className="rounded-full border border-[#c9dfc3] bg-white px-3 py-1 text-xs font-semibold text-[#69adb6]">
-                      #{index + 1}
+                    <span className="shrink-0 rounded-full bg-[#eef8ec] px-3 py-1 text-xs font-semibold text-[#046703]">
+                      #{(topProductsPage - 1) * 3 + index + 1}
                     </span>
                   </div>
 
-                  <div className="mt-3 h-2 rounded-full bg-white">
+                  <div className="mt-3 h-2 rounded-full bg-[#f1f5ef]">
                     <div
-                      className="h-2 rounded-full bg-[#f6070b]"
+                      className="h-2 rounded-full bg-[#046703]"
                       style={{
                         width: `${
-                          topProductos[0]?.cantidad
-                            ? (producto.cantidad / topProductos[0].cantidad) *
-                              100
+                          topProducts[0]?.quantity
+                            ? (product.quantity / topProducts[0].quantity) * 100
                             : 0
                         }%`,
                       }}
                     />
                   </div>
 
-                  <div className="mt-3 text-sm font-semibold text-[#f6070b]">
-                    ${producto.total.toLocaleString("es-CL")}
-                  </div>
+                  <p className="mt-2 text-sm font-semibold text-[#f6070b]">
+                    {formatCurrency(product.total)}
+                  </p>
                 </div>
               ))}
 
-              {topProductos.length === 0 && (
+              {topProducts.length === 0 && (
                 <p className="text-sm text-neutral-500">
-                  Aún no hay productos vendidos.
+                  Todavía no hay productos vendidos en este período.
                 </p>
               )}
-            </div>
-          </section>
 
-          <section className="rounded-3xl border border-[#c9dfc3] bg-white p-6 shadow-sm">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-2xl font-bold text-[#046703]">
-                Top 5 clientes
-              </h2>
-              <span className="text-sm text-neutral-500">
-                {topClientes.length} resultados
-              </span>
-            </div>
-
-            <div className="space-y-3">
-              {topClientes.map((cliente, index) => (
-                <div
-                  key={`${cliente.email}-${index}`}
-                  className="rounded-2xl border border-[#c9dfc3] bg-[#c9dfc3]/20 p-4"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="font-medium text-[#046703]">
-                        {cliente.name}
-                      </div>
-                      <div className="truncate text-xs text-neutral-500">
-                        {cliente.email}
-                      </div>
-                    </div>
-                    <span className="rounded-full border border-[#c9dfc3] bg-white px-3 py-1 text-xs font-semibold text-[#69adb6]">
-                      #{index + 1}
-                    </span>
-                  </div>
-
-                  <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
-                    <div className="rounded-xl border border-[#c9dfc3] bg-white p-3">
-                      <p className="text-neutral-500">Pedidos</p>
-                      <p className="mt-1 font-bold text-[#69adb6]">
-                        {cliente.pedidos}
-                      </p>
-                    </div>
-
-                    <div className="rounded-xl border border-[#c9dfc3] bg-white p-3">
-                      <p className="text-neutral-500">Total</p>
-                      <p className="mt-1 font-bold text-[#f6070b]">
-                        ${cliente.total.toLocaleString("es-CL")}
-                      </p>
-                    </div>
+              {topProducts.length > 3 && (
+                <div className="flex flex-col gap-3 border-t border-[#eef1ea] pt-4">
+                  <p className="text-sm text-neutral-500">
+                    Página {topProductsPage} de {topProductsTotalPages}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setTopProductsPage((current) => Math.max(1, current - 1))
+                      }
+                      disabled={topProductsPage === 1}
+                      className="rounded-full border border-[#dcebd7] px-4 py-2 text-sm font-semibold text-[#046703] transition hover:bg-[#eef8ec] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Anterior
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setTopProductsPage((current) =>
+                          Math.min(topProductsTotalPages, current + 1)
+                        )
+                      }
+                      disabled={topProductsPage === topProductsTotalPages}
+                      className="rounded-full border border-[#dcebd7] px-4 py-2 text-sm font-semibold text-[#046703] transition hover:bg-[#eef8ec] disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Página siguiente
+                    </button>
                   </div>
                 </div>
-              ))}
-
-              {topClientes.length === 0 && (
-                <p className="text-sm text-neutral-500">
-                  Aún no hay clientes.
-                </p>
               )}
             </div>
-          </section>
+          </article>
         </div>
-      </div>
+      </section>
     </div>
   );
 }

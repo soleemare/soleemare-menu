@@ -13,7 +13,6 @@ import {
   ShoppingCart,
   Users,
   TicketPercent,
-  History,
   Images,
   Menu as MenuIcon,
   X,
@@ -38,26 +37,40 @@ export default function AdminLayout({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const loadPendingCount = async () => {
-    const res = await fetch("/api/admin/orders/pending-count", {
-      cache: "no-store",
-    });
-    const data = (await res.json()) as {
-      ok: boolean;
-      count?: number;
-      error?: string;
-    };
+    try {
+      const res = await fetch("/api/admin/orders/pending-count", {
+        cache: "no-store",
+        credentials: "same-origin",
+      });
+      const data = (await res.json()) as {
+        ok: boolean;
+        count?: number;
+        error?: string;
+      };
 
-    if (!res.ok || !data.ok) {
-      if (res.status === 401 || res.status === 403) {
-        setPendingCount(0);
+      if (!res.ok || !data.ok) {
+        if (res.status === 401 || res.status === 403) {
+          setPendingCount(0);
+          return;
+        }
+
+        console.warn(
+          "Error cargando pendientes:",
+          data.error || "Sin respuesta valida"
+        );
         return;
       }
 
-      console.error("Error cargando pendientes:", data);
-      return;
-    }
+      setPendingCount(data.count || 0);
+    } catch (error) {
+      const detail =
+        error instanceof Error
+          ? error.message
+          : "No se pudo cargar el contador de pendientes.";
 
-    setPendingCount(data.count || 0);
+      console.warn("Error cargando pendientes:", detail);
+      setPendingCount(0);
+    }
   };
 
   useEffect(() => {
@@ -105,8 +118,7 @@ export default function AdminLayout({
       badge: pendingCount,
     },
     { name: "Banners", href: "/admin/banners", icon: Images },
-    { name: "Historial", href: "/admin/order-history", icon: History },
-    { name: "Clientes", href: "/admin/customers", icon: Users },
+    { name: "Gestión de pedidos", href: "/admin/customers", icon: Users },
     { name: "Cupones", href: "/admin/coupons", icon: TicketPercent },
   ];
 

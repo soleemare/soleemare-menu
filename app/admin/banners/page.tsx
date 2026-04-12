@@ -182,22 +182,35 @@ export default function AdminBannersPage() {
   const [editForm, setEditForm] = useState<BannerForm>(buildDefaultForm("hero"));
 
   const loadBanners = async () => {
-    const res = await fetch("/api/admin/banners", { cache: "no-store" });
-    const data = (await res.json()) as {
-      ok: boolean;
-      banners?: BannerRecord[];
-      error?: string;
-      detail?: string;
-    };
+    try {
+      const res = await fetch("/api/admin/banners", {
+        cache: "no-store",
+        credentials: "same-origin",
+      });
 
-    if (!res.ok || !data.ok) {
-      throw new Error(
-        data.detail || data.error || "No se pudieron cargar los banners."
-      );
+      const data = (await res.json()) as {
+        ok: boolean;
+        banners?: BannerRecord[];
+        error?: string;
+        detail?: string;
+      };
+
+      if (!res.ok || !data.ok) {
+        throw new Error(
+          data.detail || data.error || "No se pudieron cargar los banners."
+        );
+      }
+
+      setBanners(data.banners || []);
+      setError("");
+    } catch (error: unknown) {
+      const detail =
+        error instanceof Error
+          ? error.message
+          : "No se pudieron cargar los banners.";
+
+      throw new Error(detail);
     }
-
-    setBanners(data.banners || []);
-    setError("");
   };
 
   useEffect(() => {
@@ -205,11 +218,11 @@ export default function AdminBannersPage() {
       try {
         await loadBanners();
       } catch (error: unknown) {
-        console.error("Error cargando banners:", error);
         const message =
           error instanceof Error
             ? error.message
             : "No se pudieron cargar los banners.";
+        console.warn("Error cargando banners:", message);
         setError(message);
         toast.error(message);
       } finally {

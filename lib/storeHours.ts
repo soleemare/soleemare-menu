@@ -29,10 +29,27 @@ export type ScheduleSlot = {
   value: string;
 };
 
+export type ScheduledSlotCount = {
+  value: string;
+  count: number;
+};
+
 export type SchedulableDay = NextAvailableSchedule & {
   key: string;
   shortLabel: string;
   helperLabel: string;
+};
+
+export type ScheduledHeatmapCell = {
+  key: string;
+  label: string;
+  count: number;
+  intensity: number;
+};
+
+export type ScheduledHeatmapRow = {
+  hour: string;
+  cells: ScheduledHeatmapCell[];
 };
 
 type ZonedDateParts = {
@@ -57,6 +74,7 @@ export const weeklySchedule: WeeklySchedule = {
 
 const STORE_TIME_ZONE = "America/Santiago";
 const STORE_LOCALE = "es-CL";
+export const SCHEDULED_SLOT_CAPACITY = 3;
 
 const weekdayIndexMap: Record<string, number> = {
   sun: 0,
@@ -397,4 +415,106 @@ export function formatScheduledDateTime(isoDate: string | null) {
     minute: "2-digit",
     timeZone: STORE_TIME_ZONE,
   });
+}
+
+export function getScheduledSlotCounts(scheduledDates: string[]) {
+  const counts = new Map<string, number>();
+
+  scheduledDates.forEach((isoDate) => {
+    if (!isoDate) return;
+    counts.set(isoDate, (counts.get(isoDate) ?? 0) + 1);
+  });
+
+  return counts;
+}
+
+export function getScheduledHeatmapBucketKey(isoDate: string) {
+  const dayKey = getDateKeyFromIso(isoDate);
+  const hourLabel = new Date(isoDate).toLocaleTimeString(STORE_LOCALE, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    timeZone: STORE_TIME_ZONE,
+  });
+
+  return `${dayKey}-${hourLabel}`;
+}
+
+export function filterAvailableScheduleSlots(
+  slots: ScheduleSlot[],
+  slotCounts: Map<string, number>,
+  slotCapacity = SCHEDULED_SLOT_CAPACITY
+) {
+  return slots.filter((slot) => (slotCounts.get(slot.value) ?? 0) < slotCapacity);
+}
+
+export function getScheduledSlotStatus(
+  isoDate: string,
+  slotCounts: Map<string, number>,
+  slotCapacity = SCHEDULED_SLOT_CAPACITY
+) {
+  const count = slotCounts.get(isoDate) ?? 0;
+
+  return {
+    count,
+    remaining: Math.max(slotCapacity - count, 0),
+    isFull: count >= slotCapacity,
+  };
+}
+
+export function buildScheduledOrdersHeatmap(
+  scheduledDates: string[],
+  dayCount = 7,
+  slotCapacity = SCHEDULED_SLOT_CAPACITY,
+  date = new Date()
+) {
+  const schedulableDays = getSchedulableDays(date, dayCount);
+  const heatmapCounts = new Map<string, number>();
+
+  scheduledDates.forEach((isoDate) => {
+    if (!isoDate) return;
+
+    const bucketKey = getScheduledHeatmapBucketKey(isoDate);
+    heatmapCounts.set(bucketKey, (heatmapCounts.get(bucketKey) ?? 0) + 1);
+  });
+
+  const hourSet = new Set<string>();
+  const daySlots = schedulableDays.map((day) => {
+    const slots = getScheduleSlotsForDay(day, 30);
+    slots.forEach((slot) => {
+      hourSet.add(slot.label);
+    });
+    return {
+      ...day,
+      slots,
+    };
+  });
+
+  const orderedHours = Array.from(hourSet).sort((left, right) =>
+    left.localeCompare(right)
+  );
+
+  const rows: ScheduledHeatmapRow[] = orderedHours.map((hour) => ({
+    hour,
+    cells: daySlots.map((day) => {
+      const count = heatmapCounts.get(`${day.key}-${hour}`) ?? 0;
+
+      return {
+        key: `${day.key}-${hour}`,
+        label: day.shortLabel,
+        count,
+        intensity: Math.min(count / slotCapacity, 1),
+      };
+    }),
+  }));
+
+  return {
+    days: daySlots.map((day) => ({
+      key: day.key,
+      shortLabel: day.shortLabel,
+      label: capitalize(day.label),
+    })),
+    rows,
+    slotCapacity,
+  };
 }

@@ -190,6 +190,7 @@ export default function TrackPage() {
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [nowTs, setNowTs] = useState(0);
+  const [trackingError, setTrackingError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!hasValidCode) return;
@@ -198,10 +199,15 @@ export default function TrackPage() {
 
     const load = async () => {
       const trackingCode = decodeURIComponent(code).trim();
+      const trackUrl = new URL(
+        `/api/orders/${encodeURIComponent(trackingCode)}/track`,
+        window.location.origin
+      );
 
       try {
-        const res = await fetch(`/api/orders/${encodeURIComponent(trackingCode)}/track`, {
+        const res = await fetch(trackUrl.toString(), {
           cache: "no-store",
+          credentials: "same-origin",
         });
 
         const data = (await res.json()) as {
@@ -213,9 +219,10 @@ export default function TrackPage() {
         if (!res.ok || !data.ok) {
           if (!cancelled) {
             if (res.status !== 404) {
-              console.error("Error buscando tracking:", data.error || res.statusText);
+              console.warn("Tracking no disponible todavía:", data.error || res.statusText);
             }
             setOrder(null);
+            setTrackingError(data.error || "Aun no pudimos cargar tu seguimiento.");
             setLoading(false);
           }
           return;
@@ -223,14 +230,16 @@ export default function TrackPage() {
 
         if (!cancelled) {
           setOrder(data.order || null);
+          setTrackingError(null);
           setLoading(false);
         }
       } catch (error: unknown) {
         if (!cancelled) {
           const detail =
             error instanceof Error ? error.message : "Error consultando el seguimiento.";
-          console.error("Error buscando tracking:", detail);
+          console.warn("Error buscando tracking:", detail);
           setOrder(null);
+          setTrackingError("Tuvimos un problema momentaneo cargando el seguimiento.");
           setLoading(false);
         }
       }
@@ -297,7 +306,7 @@ export default function TrackPage() {
       <main className="min-h-screen bg-[#f8f5ef] px-4 py-10">
         <div className="mx-auto max-w-3xl rounded-3xl border border-[#f6070b]/20 bg-white p-8 text-center shadow-sm">
           <p className="text-lg font-medium text-[#f6070b]">
-            Pedido no encontrado.
+            {trackingError || "Pedido no encontrado."}
           </p>
         </div>
       </main>
